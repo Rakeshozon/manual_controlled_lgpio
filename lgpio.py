@@ -1,15 +1,12 @@
+#!/usr/bin/env python3
 import lgpio
 import time
 
-MotorDir = [
-    'forward',
-    'backward',
-]
+# Motor Directions
+MotorDir = ['forward', 'backward']
 
-ControlMode = [
-    'hardward',
-    'softward',
-]
+# Control Modes
+ControlMode = ['hardward', 'softward']
 
 class DRV8825:
     def __init__(self, dir_pin, step_pin, enable_pin, mode_pins):
@@ -70,9 +67,11 @@ class DRV8825:
     def TurnStep(self, Dir, steps, stepdelay=0.005):
         """Turn motor steps with direction"""
         if Dir == MotorDir[0]:  # forward
+            print("Rotating forward")
             self.digital_write(self.enable_pin, 1)
             self.digital_write(self.dir_pin, 0)
         elif Dir == MotorDir[1]:  # backward
+            print("Rotating backward")
             self.digital_write(self.enable_pin, 1)
             self.digital_write(self.dir_pin, 1)
         else:
@@ -80,13 +79,63 @@ class DRV8825:
             self.digital_write(self.enable_pin, 0)
             return
 
+        print(f"Moving {steps} steps with {stepdelay}s delay between steps")
         for _ in range(steps):
             self.digital_write(self.step_pin, 1)
             time.sleep(stepdelay)
             self.digital_write(self.step_pin, 0)
             time.sleep(stepdelay)
+        
+        self.Stop()  # Disable after movement
     
     def cleanup(self):
         """Clean up GPIO resources"""
         self.Stop()
         lgpio.gpiochip_close(self.h)
+
+def main():
+    # Initialize motor - change these pins to match your wiring
+    motor = DRV8825(
+        dir_pin=13,     # Direction pin
+        step_pin=19,    # Step pin
+        enable_pin=12,  # Enable pin
+        mode_pins=(16, 5, 20)  # Microstep mode pins
+    )
+    
+    try:
+        # Set microstepping mode (1/8 step for smoother movement)
+        motor.SetMicroStep('softward', '1/8step')
+        
+        print("Stepper motor control demo")
+        print("Commands:")
+        print("  f - move forward")
+        print("  b - move backward")
+        print("  s - stop motor")
+        print("  q - quit")
+        
+        while True:
+            cmd = input("Enter command: ").lower()
+            
+            if cmd == 'f':
+                steps = int(input("Enter number of steps: "))
+                motor.TurnStep('forward', steps)
+            elif cmd == 'b':
+                steps = int(input("Enter number of steps: "))
+                motor.TurnStep('backward', steps)
+            elif cmd == 's':
+                motor.Stop()
+                print("Motor stopped")
+            elif cmd == 'q':
+                print("Exiting...")
+                break
+            else:
+                print("Invalid command")
+                
+    except KeyboardInterrupt:
+        print("\nProgram interrupted")
+    finally:
+        motor.cleanup()
+        print("GPIO cleaned up")
+
+if __name__ == "__main__":
+    main()
