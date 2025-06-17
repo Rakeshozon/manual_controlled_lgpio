@@ -17,13 +17,14 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from ultralytics import YOLO
+from HR8825 import HR8825
 
 # Initialize GPIO
 h = lgpio.gpiochip_open(0)
 
 # Servo Configuration
-SERVO_X_PIN = 17  # BCM 17 for pan servo
-SERVO_Y_PIN = 27  # BCM 27 for tilt servo
+SERVO_X_PIN = 27  # BCM 17 for pan servo
+SERVO_Y_PIN = 17  # BCM 27 for tilt servo
 
 # Claim pins as outputs for servo PWM
 lgpio.gpio_claim_output(h, SERVO_X_PIN)
@@ -71,96 +72,46 @@ def cleanup_servos():
     servo_x.close()
     servo_y.close()
     lgpio.gpiochip_close(h)
-
-# Stepper motor control
-MotorDir = [
-    'forward',
-    'backward',
-]
-
-ControlMode = [
-    'hardward',
-    'softward',
-]
-
-class DRV8825:
-    def __init__(self, dir_pin, step_pin, enable_pin, mode_pins):
-        self.dir_pin = dir_pin
-        self.step_pin = step_pin        
-        self.enable_pin = enable_pin
-        self.mode_pins = mode_pins if isinstance(mode_pins, (list, tuple)) else [mode_pins]
-
-        self.h = lgpio.gpiochip_open(0)
-
-        # Claim all pins as outputs
-        lgpio.gpio_claim_output(self.h, self.dir_pin)
-        lgpio.gpio_claim_output(self.h, self.step_pin)
-        lgpio.gpio_claim_output(self.h, self.enable_pin)
-        for pin in self.mode_pins:
-            lgpio.gpio_claim_output(self.h, pin)
-
-    def digital_write(self, pin, value):
-        lgpio.gpio_write(self.h, pin, value)
-
-    def Stop(self):
-        self.digital_write(self.enable_pin, 0)
-
-    def SetMicroStep(self, mode, stepformat):
-        microstep = {
-            'fullstep': (0, 0, 0),
-            'halfstep': (1, 0, 0),
-            '1/4step': (0, 1, 0),
-            '1/8step': (1, 1, 0),
-            '1/16step': (0, 0, 1),
-            '1/32step': (1, 0, 1)
-        }
-
-        if mode == ControlMode[1]:  # software
-            values = microstep.get(stepformat)
-            if values and len(values) == len(self.mode_pins):
-                for pin, val in zip(self.mode_pins, values):
-                    self.digital_write(pin, val)
-            else:
-                print("Invalid step format or mode pin count mismatch.")
-
-    def TurnStep(self, Dir, steps, stepdelay=0.005):
-        if Dir == MotorDir[0]:  # forward
-            self.digital_write(self.enable_pin, 1)
-            self.digital_write(self.dir_pin, 0)
-        elif Dir == MotorDir[1]:  # backward
-            self.digital_write(self.enable_pin, 1)
-            self.digital_write(self.dir_pin, 1)
-        else:
-            self.digital_write(self.enable_pin, 0)
-            return
-
-        for _ in range(steps):
-            self.digital_write(self.step_pin, 1)
-            time.sleep(stepdelay)
-            self.digital_write(self.step_pin, 0)
-            time.sleep(stepdelay)
-
-    def cleanup(self):
-        self.Stop()
-        lgpio.gpiochip_close(self.h)
-
-# Initialize motor drivers
 try:
-    MotorX = DRV8825(dir_pin=13, step_pin=19, enable_pin=25, mode_pins=(16, 5, 20))
-    MotorY = DRV8825(dir_pin=24, step_pin=18, enable_pin=23, mode_pins=(21, 22, 6))
+    # MotorY: Vertical movement (Y-axis)
+    MotorY = HR8825(
+        dir_pin=13,    # BCM 27 (Physical pin 13)
+        step_pin=19,   # BCM 10 (Physical pin 19)
+        enable_pin=12, # BCM 18 (Physical pin 12)
+        mode_pins=(16, 6, 20)  # M0, M1, M2 (BCM 16,17,20)
+    )
+    
+    # MotorX: Horizontal movement (X-axis)
+    MotorX = HR8825(
+        dir_pin=24,    # BCM 19 (Physical pin 24)
+        step_pin=18,   # BCM 24 (Physical pin 18)
+        enable_pin=4,  # BCM 23 (Physical pin 16)
+        mode_pins=(21, 22, 5)  # M0, M1, M2 (BCM 21,22,27)
+    )
+    
+    # Set microstepping modes
+    MotorX.SetMicroStep('softward', 'fullstep')
+    MotorY.SetMicroStep('hardward', 'halfstep')
+    
 except Exception as e:
     print(f"Motor initialization error: {e}")
+    raise
 
 def stepper_move_x(steps):
     """Move X stepper motor by specified steps"""
-    direction = MotorDir[0] if steps > 0 else MotorDir[1]
-    MotorX.TurnStep(direction, abs(steps))
+    try:
+        direction = 'forward' if steps > 0 else 'backward'
+        MotorX.TurnStep(Dir=direction, steps=abs(steps), stepdelay=0.005)
+    except Exception as e:
+        print(f"Error moving X stepper: {e}")
 
 def stepper_move_y(steps):
     """Move Y stepper motor by specified steps"""
-    direction = MotorDir[0] if steps > 0 else MotorDir[1]
-    MotorY.TurnStep(direction, abs(steps))
-
+    try:
+        direction = 'forward' if steps > 0 else 'backward'
+        MotorY.TurnStep(Dir=direction, steps=abs(steps), stepdelay=0.005)
+    except Exception as e:
+        print(f"Error moving Y stepper: {e}")
 class ReportGenerator:
     def __init__(self, patient_id, connection):
         self.patient_id = patient_id
@@ -379,9 +330,42 @@ class ImageCaptureApp:
     def __init__(self, root, emailid):
         self.root = root
         self.emailid = emailid
+        
+        # Get screen dimensions for responsive layout
+        screen_width = root.winfo_screenwidth()
+        screen_height = root.winfo_screenheight()
+        
+        # Set window to full screen or reasonable size
+        if screen_width > 1400 and screen_height > 900:
+            self.root.geometry("1400x900")
+        else:
+            # Use 90% of screen size if smaller than default
+            self.root.geometry(f"{int(screen_width*0.9)}x{int(screen_height*0.9)}")
+        
         self.root.title("Oral Image Capture System")
-        self.root.geometry("1400x900")
         self.root.configure(bg="#f0f2f5")
+        
+        # Make the window maximized by default
+        self.root.state('iconic')  # This will maximize the window
+        
+        # Style configuration
+        self.style = ttk.Style()
+        self.style.configure('TFrame', background="#f0f2f5")
+        self.style.configure('TLabel', background="#f0f2f5", font=('Arial', 11))
+        self.style.configure('TButton', font=('Arial', 11), padding=5)
+        self.style.configure('Title.TLabel', font=('Arial', 14, 'bold'))
+        self.style.configure('Header.TLabel', font=('Arial', 12, 'bold'))
+        self.style.configure('Accent.TButton', foreground='white', background='#3498db', font=('Arial', 11, 'bold'))
+        
+        # Initialize variables
+        self.current_image_index = 0
+        self._camera_running = True
+        
+        # Constants for UI (will be adjusted dynamically)
+        self.IMAGE_WIDTH = 350  # Will be adjusted based on window size
+        self.IMAGE_HEIGHT = 250
+        self.CAMERA_WIDTH = 640
+        self.CAMERA_HEIGHT = 480
         
         # Style configuration
         self.style = ttk.Style()
@@ -394,12 +378,7 @@ class ImageCaptureApp:
         # Initialize variables
         self.current_image_index = 0
         self._camera_running = True
-        
-        # Constants for UI
-        self.IMAGE_WIDTH = 350
-        self.IMAGE_HEIGHT = 350
-        self.CAMERA_WIDTH = 640
-        self.CAMERA_HEIGHT = 480
+      
               
         # Image and instruction data
         self.image_list = [
@@ -527,16 +506,236 @@ class ImageCaptureApp:
         except Error as e:
             messagebox.showerror("Database Error", f"Error: {e}")
             self.root.destroy()
-
+    def on_window_resize(self, event):
+        """Handle window resize events to adjust UI elements"""
+        if event.widget == self.root:
+            # Calculate new sizes based on window dimensions
+            window_width = self.root.winfo_width()
+            window_height = self.root.winfo_height()
+            
+            # Adjust image sizes proportionally
+            self.IMAGE_WIDTH = max(200, min(400, int(window_width * 0.15)))
+            self.IMAGE_HEIGHT = max(150, min(300, int(window_height * 0.25)))
+            
+            # Update displayed images if they exist
+            if hasattr(self, 'ref_image_label') and hasattr(self.ref_image_label, 'image'):
+                self.display_current_view()
+            
+            # Adjust camera size if needed
+            self.CAMERA_WIDTH = max(400, min(800, int(window_width * 0.4)))
+            self.CAMERA_HEIGHT = max(300, min(600, int(self.CAMERA_WIDTH * 0.75)))
+            
+            # Update camera feed if it exists
+            if hasattr(self, 'cap') and self.cap.isOpened():
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
+   
     def setup_ui(self):
-        """Set up all UI components"""
-        # Main frames
-        self.setup_left_panel()  # Instructions and reference images
-        self.setup_right_panel()  # Camera feed and controls
-        self.setup_bottom_controls()  # Navigation buttons
+        """Set up all UI components with responsive layout"""
+        # Main container using grid for responsive layout
+        self.main_container = ttk.Frame(self.root)
+        self.main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Display first image and instructions
-        self.display_current_view()
+        # Configure grid weights for responsive layout
+        self.main_container.grid_columnconfigure(0, weight=1)  # Left panel (reference images)
+        self.main_container.grid_columnconfigure(1, weight=2)  # Middle panel (instructions)
+        self.main_container.grid_columnconfigure(2, weight=3)  # Right panel (camera and controls)
+        self.main_container.grid_rowconfigure(0, weight=1)     # Main content area
+        self.main_container.grid_rowconfigure(1, weight=0)     # Bottom controls (fixed height)
+        
+        # Left Panel (Reference Images and GIF)
+        left_panel = ttk.Frame(self.main_container)
+        left_panel.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        left_panel.grid_propagate(False)
+        
+        # Configure left panel grid
+        left_panel.grid_rowconfigure(0, weight=1)  # Reference image
+        left_panel.grid_rowconfigure(1, weight=1)  # GIF
+        left_panel.grid_columnconfigure(0, weight=1)
+        
+        # Reference image
+        ref_frame = ttk.LabelFrame(left_panel, text="Reference Image", style='Header.TLabel')
+        ref_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        ref_frame.grid_propagate(False)
+        
+        self.ref_image_label = ttk.Label(ref_frame)
+        self.ref_image_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # GIF demonstration
+        gif_frame = ttk.LabelFrame(left_panel, text="Demonstration", style='Header.TLabel')
+        gif_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        gif_frame.grid_propagate(False)
+        
+        self.gif_label = ttk.Label(gif_frame)
+        self.gif_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Middle Panel (Instructions)
+        middle_panel = ttk.Frame(self.main_container)
+        middle_panel.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        
+        # Instructions frame with scrollbar
+        instr_frame = ttk.LabelFrame(middle_panel, text="Instructions", style='Header.TLabel')
+        instr_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Create canvas and scrollbar
+        canvas = tk.Canvas(instr_frame, bg="white", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(instr_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack the canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Instructions label
+        self.instructions_label = ttk.Label(
+            scrollable_frame,
+            text="",
+            wraplength=400,  # Will adjust with window size
+            justify="left",
+            font=('Arial', 11)
+        )
+        self.instructions_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Right Panel (Camera and Controls)
+        right_panel = ttk.Frame(self.main_container)
+        right_panel.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
+        
+        # Configure right panel grid
+        right_panel.grid_rowconfigure(0, weight=3)  # Camera feed
+        right_panel.grid_rowconfigure(1, weight=2)  # Controls
+        right_panel.grid_columnconfigure(0, weight=1)
+        
+        # Camera feed
+        camera_frame = ttk.LabelFrame(right_panel, text="Camera Feed", style='Header.TLabel')
+        camera_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        
+        self.camera_label = ttk.Label(camera_frame)
+        self.camera_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Motor controls frame
+        controls_frame = ttk.Frame(right_panel)
+        controls_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        
+        # Configure controls frame grid
+        controls_frame.grid_columnconfigure(0, weight=1)
+        controls_frame.grid_rowconfigure(0, weight=1)  # Servo controls
+        controls_frame.grid_rowconfigure(1, weight=1)  # Stepper controls
+        
+        # Servo controls
+        servo_frame = ttk.LabelFrame(controls_frame, text="Servo Controls", style='Header.TLabel')
+        servo_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        
+        # Pan (X-axis) controls
+        pan_frame = ttk.Frame(servo_frame)
+        pan_frame.pack(side=tk.LEFT, padx=10, pady=5)
+        
+        ttk.Label(pan_frame, text="Pan (X-axis)").pack()
+        
+        btn_frame = ttk.Frame(pan_frame)
+        btn_frame.pack()
+        
+        ttk.Button(btn_frame, text="◄ Left", 
+                  command=lambda: move_servo_x(-10), 
+                  width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Right ►", 
+                  command=lambda: move_servo_x(10), 
+                  width=8).pack(side=tk.LEFT, padx=2)
+        
+        # Tilt (Y-axis) controls
+        tilt_frame = ttk.Frame(servo_frame)
+        tilt_frame.pack(side=tk.LEFT, padx=10, pady=5)
+        
+        ttk.Label(tilt_frame, text="Tilt (Y-axis)").pack()
+        
+        btn_frame = ttk.Frame(tilt_frame)
+        btn_frame.pack()
+        
+        ttk.Button(btn_frame, text="▲ Up", 
+                  command=lambda: move_servo_y(-10), 
+                  width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="▼ Down", 
+                  command=lambda: move_servo_y(10), 
+                  width=8).pack(side=tk.LEFT, padx=2)
+        
+        # Reset button
+        ttk.Button(servo_frame, text="Reset", 
+                  command=reset_servos,
+                  style='Accent.TButton').pack(side=tk.RIGHT, padx=10)
+        
+        # Stepper Motor controls
+        stepper_frame = ttk.LabelFrame(controls_frame, text="Stepper Motor Controls", style='Header.TLabel')
+        stepper_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        
+        # Create a grid for stepper controls
+        control_grid = ttk.Frame(stepper_frame)
+        control_grid.pack(pady=5)
+        
+        # Add buttons in a cross pattern
+        ttk.Button(control_grid, text="▲ Up", 
+                  command=lambda: stepper_move_y(-100), 
+                  width=8).grid(row=0, column=1, padx=5, pady=2)
+        ttk.Button(control_grid, text="◄ Left", 
+                  command=lambda: stepper_move_x(-100), 
+                  width=8).grid(row=1, column=0, padx=5, pady=2)
+        ttk.Button(control_grid, text="Center", 
+                  command=reset_servos,
+                  width=8).grid(row=1, column=1, padx=5, pady=2)
+        ttk.Button(control_grid, text="Right ►", 
+                  command=lambda: stepper_move_x(100), 
+                  width=8).grid(row=1, column=2, padx=5, pady=2)
+        ttk.Button(control_grid, text="▼ Down", 
+                  command=lambda: stepper_move_y(100), 
+                  width=8).grid(row=2, column=1, padx=5, pady=2)
+        
+        # Bottom Controls (Navigation and Capture)
+        bottom_frame = ttk.Frame(self.main_container)
+        bottom_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=10)
+        
+        # Configure grid for bottom controls
+        bottom_frame.grid_columnconfigure(0, weight=1)
+        bottom_frame.grid_columnconfigure(1, weight=1)
+        bottom_frame.grid_columnconfigure(2, weight=1)
+        
+        # Previous button
+        self.prev_btn = ttk.Button(
+            bottom_frame,
+            text="◄ Previous",
+            command=self.prev_image,
+            width=12
+        )
+        self.prev_btn.grid(row=0, column=0, padx=5, sticky="w")
+        
+        # Capture button (centered)
+        self.capture_btn = ttk.Button(
+            bottom_frame,
+            text="Capture Image",
+            command=self.capture_image,
+            style='Accent.TButton',
+            width=15
+        )
+        self.capture_btn.grid(row=0, column=1, padx=5)
+        
+        # Next/Finish button
+        self.next_btn = ttk.Button(
+            bottom_frame,
+            text="Next ►",
+            command=self.next_image,
+            width=12
+        )
+        self.next_btn.grid(row=0, column=2, padx=5, sticky="e")
+        
+        # Initially disable previous button
+        self.prev_btn.config(state=tk.DISABLED)
 
     def setup_left_panel(self):
         """Left panel with instructions and reference images"""
