@@ -1,6 +1,6 @@
 import io
 import tkinter as tk
-from tkinter import Toplevel, messagebox
+from tkinter import Toplevel, messagebox, ttk
 import cv2
 from PIL import Image, ImageTk, ImageSequence
 import mysql.connector
@@ -50,6 +50,16 @@ class StableServo:
 # Initialize servos with stable control
 servo_x = StableServo(SERVO_X_PIN)
 servo_y = StableServo(SERVO_Y_PIN)
+
+def move_servo_x(angle_change):
+    """Move servo X by specified angle change"""
+    new_angle = servo_x.current_angle + angle_change
+    servo_x.move_to_angle(new_angle)
+
+def move_servo_y(angle_change):
+    """Move servo Y by specified angle change"""
+    new_angle = servo_y.current_angle + angle_change
+    servo_y.move_to_angle(new_angle)
 
 def reset_servos():
     """Reset servos to center position"""
@@ -140,6 +150,16 @@ try:
     MotorY = DRV8825(dir_pin=24, step_pin=18, enable_pin=23, mode_pins=(21, 22, 6))
 except Exception as e:
     print(f"Motor initialization error: {e}")
+
+def stepper_move_x(steps):
+    """Move X stepper motor by specified steps"""
+    direction = MotorDir[0] if steps > 0 else MotorDir[1]
+    MotorX.TurnStep(direction, abs(steps))
+
+def stepper_move_y(steps):
+    """Move Y stepper motor by specified steps"""
+    direction = MotorDir[0] if steps > 0 else MotorDir[1]
+    MotorY.TurnStep(direction, abs(steps))
 
 class ReportGenerator:
     def __init__(self, patient_id, connection):
@@ -360,16 +380,24 @@ class ImageCaptureApp:
         self.root = root
         self.emailid = emailid
         self.root.title("Oral Image Capture System")
-        self.root.geometry("1300x920")
-        self.root.configure(bg="white")
+        self.root.geometry("1400x900")
+        self.root.configure(bg="#f0f2f5")
+        
+        # Style configuration
+        self.style = ttk.Style()
+        self.style.configure('TFrame', background="#f0f2f5")
+        self.style.configure('TLabel', background="#f0f2f5", font=('Arial', 11))
+        self.style.configure('TButton', font=('Arial', 11), padding=5)
+        self.style.configure('Title.TLabel', font=('Arial', 14, 'bold'))
+        self.style.configure('Header.TLabel', font=('Arial', 12, 'bold'))
         
         # Initialize variables
         self.current_image_index = 0
         self._camera_running = True
         
         # Constants for UI
-        self.IMAGE_WIDTH = 300
-        self.IMAGE_HEIGHT = 300
+        self.IMAGE_WIDTH = 350
+        self.IMAGE_HEIGHT = 350
         self.CAMERA_WIDTH = 640
         self.CAMERA_HEIGHT = 480
               
@@ -455,6 +483,7 @@ class ImageCaptureApp:
             '''1. Natural lighting is preferred, ensure that the light source is in the opposite direction of the mouth
 2. Say "aaah!" open mouth wide/big
 3. Tilt head backward''']
+        
         # Setup database connection
         self.setup_database()
         
@@ -480,6 +509,7 @@ class ImageCaptureApp:
         finally:
             if 'cursor' in locals():
                 cursor.close()
+
     def setup_database(self):
         """Initialize database connection"""
         try:
@@ -511,91 +541,65 @@ class ImageCaptureApp:
     def setup_left_panel(self):
         """Left panel with instructions and reference images"""
         # Main frame
-        self.left_frame = tk.Frame(self.root, bg="white", width=400, height=800)
+        self.left_frame = ttk.Frame(self.root, width=450)
         self.left_frame.pack_propagate(False)
         self.left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
         
-        # Reference image display
-        self.ref_image_frame = tk.Frame(self.left_frame, bg="white")
-        self.ref_image_frame.pack(fill=tk.X, pady=5)
+        # Title
+        ttk.Label(self.left_frame, text="Capture Guide", style='Title.TLabel').pack(pady=10)
         
-        self.ref_image_label = tk.Label(self.ref_image_frame, bg="white")
-        self.ref_image_label.pack()
+        # Reference image display
+        ref_img_frame = ttk.LabelFrame(self.left_frame, text="Reference Image", style='Header.TLabel')
+        ref_img_frame.pack(fill=tk.X, pady=5, padx=5)
+        
+        self.ref_image_label = ttk.Label(ref_img_frame)
+        self.ref_image_label.pack(pady=5)
         
         # GIF demonstration
-        self.gif_frame = tk.Frame(self.left_frame, bg="white")
-        self.gif_frame.pack(fill=tk.X, pady=5)
+        gif_frame = ttk.LabelFrame(self.left_frame, text="Demonstration", style='Header.TLabel')
+        gif_frame.pack(fill=tk.X, pady=5, padx=5)
         
-        self.gif_label = tk.Label(self.gif_frame, bg="white")
-        self.gif_label.pack()
+        self.gif_label = ttk.Label(gif_frame)
+        self.gif_label.pack(pady=5)
         
         # Instructions frame
-        self.instructions_frame = tk.LabelFrame(
-            self.left_frame, 
-            text="INSTRUCTIONS", 
-            font=("Arial", 12, "bold"),
-            bg="white",
-            padx=10,
-            pady=10
-        )
-        self.instructions_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        instr_frame = ttk.LabelFrame(self.left_frame, text="Instructions", style='Header.TLabel')
+        instr_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
         
         # Scrollable instructions
-        self.instructions_canvas = tk.Canvas(
-            self.instructions_frame, 
-            bg="white", 
-            highlightthickness=0
-        )
-        self.scrollbar = tk.Scrollbar(
-            self.instructions_frame, 
-            orient="vertical", 
-            command=self.instructions_canvas.yview
-        )
-        self.instructions_scroll_frame = tk.Frame(self.instructions_canvas, bg="white")
+        instr_canvas = tk.Canvas(instr_frame, bg="#ffffff", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(instr_frame, orient="vertical", command=instr_canvas.yview)
+        self.instructions_scroll_frame = ttk.Frame(instr_canvas)
         
-        self.instructions_canvas.configure(yscrollcommand=self.scrollbar.set)
-        self.instructions_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        instr_canvas.configure(yscrollcommand=scrollbar.set)
+        instr_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.instructions_canvas.create_window(
-            (0, 0), 
-            window=self.instructions_scroll_frame, 
-            anchor="nw",
-            tags="frame"
-        )
+        instr_canvas.create_window((0, 0), window=self.instructions_scroll_frame, anchor="nw")
         
         self.instructions_scroll_frame.bind(
             "<Configure>",
-            lambda e: self.instructions_canvas.configure(
-                scrollregion=self.instructions_canvas.bbox("all")
-            )
+            lambda e: instr_canvas.configure(scrollregion=instr_canvas.bbox("all"))
         )
         
-        self.instructions_label = tk.Label(
+        self.instructions_label = ttk.Label(
             self.instructions_scroll_frame,
             text="",
-            bg="white",
-            font=("Arial", 11),
-            wraplength=350,
+            wraplength=400,
             justify="left"
         )
-        self.instructions_label.pack(fill=tk.BOTH, expand=True)
+        self.instructions_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     def setup_right_panel(self):
         """Right panel with camera feed and controls"""
-        self.right_frame = tk.Frame(self.root, bg="white")
+        self.right_frame = ttk.Frame(self.root)
         self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Camera feed display
-        self.camera_frame = tk.LabelFrame(
-            self.right_frame,
-            text="Camera Feed",
-            font=("Arial", 12, "bold"),
-            bg="white"
-        )
-        self.camera_frame.pack(fill=tk.BOTH, expand=True)
+        camera_frame = ttk.LabelFrame(self.right_frame, text="Camera Feed", style='Header.TLabel')
+        camera_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         
-        self.camera_label = tk.Label(self.camera_frame, bg="black")
+        self.camera_label = ttk.Label(camera_frame)
         self.camera_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Motor controls
@@ -604,119 +608,113 @@ class ImageCaptureApp:
     def setup_motor_controls(self):
         """Setup servo and stepper motor controls"""
         # Servo Control Frame
-        servo_frame = tk.LabelFrame(
-            self.right_frame,
-            text="Servo Controls",
-            font=("Arial", 12, "bold"),
-            bg="white"
-        )
+        servo_frame = ttk.LabelFrame(self.right_frame, text="Servo Controls", style='Header.TLabel')
         servo_frame.pack(fill=tk.X, pady=5)
         
         # Pan (X-axis) controls
-        pan_frame = tk.Frame(servo_frame, bg="white")
+        pan_frame = ttk.Frame(servo_frame)
         pan_frame.pack(side=tk.LEFT, padx=10, pady=5)
         
-        tk.Label(pan_frame, text="Pan (X-axis)", bg="white").pack()
+        ttk.Label(pan_frame, text="Pan (X-axis)").pack()
         
-        btn_frame = tk.Frame(pan_frame, bg="white")
+        btn_frame = ttk.Frame(pan_frame)
         btn_frame.pack()
         
-        tk.Button(btn_frame, text="◄ Left", 
-                 command=lambda: move_servo_x(-10), 
-                 width=8).pack(side=tk.LEFT, padx=2)
-        tk.Button(btn_frame, text="Right ►", 
-                 command=lambda: move_servo_x(10), 
-                 width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="◄ Left", 
+                  command=lambda: move_servo_x(-10), 
+                  width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Right ►", 
+                  command=lambda: move_servo_x(10), 
+                  width=8).pack(side=tk.LEFT, padx=2)
         
         # Tilt (Y-axis) controls
-        tilt_frame = tk.Frame(servo_frame, bg="white")
+        tilt_frame = ttk.Frame(servo_frame)
         tilt_frame.pack(side=tk.LEFT, padx=10, pady=5)
         
-        tk.Label(tilt_frame, text="Tilt (Y-axis)", bg="white").pack()
+        ttk.Label(tilt_frame, text="Tilt (Y-axis)").pack()
         
-        btn_frame = tk.Frame(tilt_frame, bg="white")
+        btn_frame = ttk.Frame(tilt_frame)
         btn_frame.pack()
         
-        tk.Button(btn_frame, text="▲ Up", 
-                 command=lambda: move_servo_y(-10), 
-                 width=8).pack(side=tk.LEFT, padx=2)
-        tk.Button(btn_frame, text="▼ Down", 
-                 command=lambda: move_servo_y(10), 
-                 width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="▲ Up", 
+                  command=lambda: move_servo_y(-10), 
+                  width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="▼ Down", 
+                  command=lambda: move_servo_y(10), 
+                  width=8).pack(side=tk.LEFT, padx=2)
         
         # Reset button
-        tk.Button(servo_frame, text="Reset", 
-                 command=reset_servos,
-                 bg="#3498db", fg="white").pack(side=tk.RIGHT, padx=10)
+        ttk.Button(servo_frame, text="Reset", 
+                  command=reset_servos,
+                  style='Accent.TButton').pack(side=tk.RIGHT, padx=10)
         
         # Stepper Motor Frame
-        stepper_frame = tk.LabelFrame(
-            self.right_frame,
-            text="Stepper Motor Controls",
-            font=("Arial", 12, "bold"),
-            bg="white"
-        )
+        stepper_frame = ttk.LabelFrame(self.right_frame, text="Stepper Motor Controls", style='Header.TLabel')
         stepper_frame.pack(fill=tk.X, pady=5)
         
         # Movement buttons
-        control_frame = tk.Frame(stepper_frame, bg="white")
+        control_frame = ttk.Frame(stepper_frame)
         control_frame.pack(pady=5)
         
-        tk.Button(control_frame, text="◄ Left", 
-                 command=lambda: stepper_move_x(-100), 
-                 width=8).grid(row=1, column=0, padx=2, pady=2)
-        tk.Button(control_frame, text="Right ►", 
-                 command=lambda: stepper_move_x(100), 
-                 width=8).grid(row=1, column=2, padx=2, pady=2)
-        tk.Button(control_frame, text="▲ Up", 
-                 command=lambda: stepper_move_y(-100), 
-                 width=8).grid(row=0, column=1, padx=2, pady=2)
-        tk.Button(control_frame, text="▼ Down", 
-                 command=lambda: stepper_move_y(100), 
-                 width=8).grid(row=2, column=1, padx=2, pady=2)
+        # Create a grid layout for the stepper controls
+        ttk.Button(control_frame, text="▲ Up", 
+                  command=lambda: stepper_move_y(-100), 
+                  width=8).grid(row=0, column=1, padx=5, pady=2)
+        ttk.Button(control_frame, text="◄ Left", 
+                  command=lambda: stepper_move_x(-100), 
+                  width=8).grid(row=1, column=0, padx=5, pady=2)
+        ttk.Button(control_frame, text="▼ Down", 
+                  command=lambda: stepper_move_y(100), 
+                  width=8).grid(row=2, column=1, padx=5, pady=2)
+        ttk.Button(control_frame, text="Right ►", 
+                  command=lambda: stepper_move_x(100), 
+                  width=8).grid(row=1, column=2, padx=5, pady=2)
+        
+        # Center button (can be used for reset or other functions)
+        ttk.Button(control_frame, text="Center", 
+                  command=reset_servos,
+                  width=8).grid(row=1, column=1, padx=5, pady=2)
 
     def setup_bottom_controls(self):
         """Setup navigation and capture buttons"""
-        self.control_frame = tk.Frame(self.root, bg="white")
-        self.control_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+        self.control_frame = ttk.Frame(self.root)
+        self.control_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10, padx=10)
         
         # Navigation buttons
-        self.prev_btn = tk.Button(
+        self.prev_btn = ttk.Button(
             self.control_frame,
             text="◄ Previous",
             command=self.prev_image,
-            font=("Arial", 12),
-            bg="#3498db",
-            fg="white",
             width=12
         )
         self.prev_btn.pack(side=tk.LEFT, padx=10)
         
-        self.next_btn = tk.Button(
+        self.next_btn = ttk.Button(
             self.control_frame,
             text="Next ►",
             command=self.next_image,
-            font=("Arial", 12),
-            bg="#3498db",
-            fg="white",
             width=12
         )
         self.next_btn.pack(side=tk.LEFT, padx=10)
         
+        # Spacer
+        ttk.Frame(self.control_frame, width=20).pack(side=tk.LEFT)
+        
         # Capture button
-        self.capture_btn = tk.Button(
+        self.capture_btn = ttk.Button(
             self.control_frame,
             text="Capture Image",
             command=self.capture_image,
-            font=("Arial", 12, "bold"),
-            bg="#2ecc71",
-            fg="white",
+            style='Accent.TButton',
             width=15
         )
-        self.capture_btn.pack(side=tk.LEFT, padx=20)
+        self.capture_btn.pack(side=tk.LEFT, padx=10)
         
         # Initially disable previous button
         self.prev_btn.config(state=tk.DISABLED)
+        
+        # Add some styling for the buttons
+        self.style.configure('Accent.TButton', foreground='white', background='#3498db', font=('Arial', 11, 'bold'))
 
     def setup_camera(self):
         """Initialize USB camera"""
@@ -836,67 +834,70 @@ class ImageCaptureApp:
         """Show preview of captured image with save options"""
         preview = Toplevel(self.root)
         preview.title("Image Preview")
-        preview.geometry("800x600")
+        preview.geometry("900x700")
         preview.resizable(False, False)
+        preview.configure(bg="#f0f2f5")
+        
+        # Main frame
+        main_frame = ttk.Frame(preview)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Title
+        ttk.Label(main_frame, 
+                 text="Image Preview", 
+                 style='Title.TLabel').pack(pady=10)
+        
+        # Images frame
+        images_frame = ttk.Frame(main_frame)
+        images_frame.pack(fill=tk.BOTH, expand=True)
         
         # Reference image
-        ref_frame = tk.Frame(preview, bg="white")
-        ref_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        tk.Label(ref_frame, text="Reference Image", font=("Arial", 12, "bold")).pack()
+        ref_frame = ttk.LabelFrame(images_frame, text="Reference Image", style='Header.TLabel')
+        ref_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         ref_img = Image.open(self.image_list[self.current_image_index])
-        ref_img = ref_img.resize((350, 350), Image.LANCZOS)
+        ref_img = ref_img.resize((400, 400), Image.LANCZOS)
         ref_img_tk = ImageTk.PhotoImage(ref_img)
         
-        ref_label = tk.Label(ref_frame, image=ref_img_tk, bg="white")
+        ref_label = ttk.Label(ref_frame, image=ref_img_tk)
         ref_label.image = ref_img_tk
         ref_label.pack(pady=10)
         
         # Captured image
-        cap_frame = tk.Frame(preview, bg="white")
-        cap_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        cap_frame = ttk.LabelFrame(images_frame, text="Your Image", style='Header.TLabel')
+        cap_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        tk.Label(cap_frame, text="Your Image", font=("Arial", 12, "bold")).pack()
-        
-        cap_img = self.captured_image.resize((350, 350), Image.LANCZOS)
+        cap_img = self.captured_image.resize((400, 400), Image.LANCZOS)
         cap_img_tk = ImageTk.PhotoImage(cap_img)
         
-        cap_label = tk.Label(cap_frame, image=cap_img_tk, bg="white")
+        cap_label = ttk.Label(cap_frame, image=cap_img_tk)
         cap_label.image = cap_img_tk
         cap_label.pack(pady=10)
         
-        # Buttons
-        btn_frame = tk.Frame(preview, bg="white")
+        # Buttons frame
+        btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(side=tk.BOTTOM, pady=20)
         
-        tk.Button(
+        ttk.Button(
             btn_frame,
             text="Retake",
             command=lambda: [preview.destroy(), self.capture_image()],
-            font=("Arial", 12),
-            bg="#e74c3c",
-            fg="white",
-            width=10
+            width=12
         ).pack(side=tk.LEFT, padx=10)
         
-        tk.Button(
+        ttk.Button(
             btn_frame,
             text="Save",
             command=lambda: [self.save_image(), preview.destroy()],
-            font=("Arial", 12),
-            bg="#2ecc71",
-            fg="white",
-            width=10
+            style='Accent.TButton',
+            width=12
         ).pack(side=tk.LEFT, padx=10)
         
-        tk.Button(
+        ttk.Button(
             btn_frame,
             text="Save & Next",
             command=lambda: [self.save_image(), preview.destroy(), self.next_image()],
-            font=("Arial", 12),
-            bg="#3498db",
-            fg="white",
+            style='Accent.TButton',
             width=12
         ).pack(side=tk.LEFT, padx=10)
 
@@ -970,25 +971,31 @@ class ImageCaptureApp:
             widget.destroy()
         
         # Analysis frame
-        analysis_frame = tk.Frame(self.root, bg="white")
+        analysis_frame = ttk.Frame(self.root)
         analysis_frame.pack(fill=tk.BOTH, expand=True)
         
-        tk.Label(
+        ttk.Label(
             analysis_frame,
             text="Analyzing Images...",
-            font=("Arial", 24, "bold"),
-            bg="white",
-            fg="#3498db"
+            style='Title.TLabel'
         ).pack(pady=50)
         
         # Progress bar
-        self.progress = tk.ttk.Progressbar(
+        self.progress = ttk.Progressbar(
             analysis_frame,
             orient="horizontal",
             length=600,
             mode="determinate"
         )
         self.progress.pack(pady=20)
+        
+        # Status label
+        self.status_label = ttk.Label(
+            analysis_frame,
+            text="Processing images and generating report...",
+            style='Header.TLabel'
+        )
+        self.status_label.pack(pady=10)
         
         # Start analysis after short delay
         self.root.after(1000, self.perform_analysis)
@@ -1002,6 +1009,7 @@ class ImageCaptureApp:
             # Simulate progress
             for i in range(0, 101, 10):
                 self.progress["value"] = i
+                self.status_label.config(text=f"Processing... {i}% complete")
                 self.root.update()
                 time.sleep(0.2)
             
@@ -1029,70 +1037,60 @@ class ImageCaptureApp:
             widget.destroy()
         
         # Results frame
-        results_frame = tk.Frame(self.root, bg="white")
-        results_frame.pack(fill=tk.BOTH, expand=True)
+        results_frame = ttk.Frame(self.root)
+        results_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
         # Header
-        tk.Label(
+        ttk.Label(
             results_frame,
             text="Examination Complete!",
-            font=("Arial", 24, "bold"),
-            bg="white",
-            fg="#2ecc71"
+            style='Title.TLabel',
+            foreground="#2ecc71"
         ).pack(pady=20)
         
-        tk.Label(
+        ttk.Label(
             results_frame,
             text="Your oral examination has been completed successfully.",
-            font=("Arial", 14),
-            bg="white"
+            style='Header.TLabel'
         ).pack(pady=10)
         
         # Options frame
-        options_frame = tk.Frame(results_frame, bg="white")
+        options_frame = ttk.Frame(results_frame)
         options_frame.pack(pady=30)
         
         # View Report button
-        tk.Button(
+        ttk.Button(
             options_frame,
             text="View Report in Browser",
             command=lambda: webbrowser.open(html_path),
-            font=("Arial", 12),
-            bg="#3498db",
-            fg="white",
+            style='Accent.TButton',
             width=25
         ).pack(pady=10)
         
         # Download PDF button
-        tk.Button(
+        ttk.Button(
             options_frame,
             text="Download PDF Report",
             command=lambda: webbrowser.open(pdf_path),
-            font=("Arial", 12),
-            bg="#9b59b6",
-            fg="white",
+            style='Accent.TButton',
             width=25
         ).pack(pady=10)
         
         # Email Report button
-        tk.Button(
+        ttk.Button(
             options_frame,
             text="Email Report",
             command=lambda: self.email_report(pdf_path),
-            font=("Arial", 12),
-            bg="#e67e22",
-            fg="white",
+            style='Accent.TButton',
             width=25
         ).pack(pady=10)
         
         # Exit button
-        tk.Button(
+        ttk.Button(
             options_frame,
             text="Exit",
             command=self.cleanup_and_exit,
-            font=("Arial", 12, "bold"),
-            bg="#e74c3c",
-            fg="white",
+            style='Accent.TButton',
             width=25
         ).pack(pady=20)
 
@@ -1181,4 +1179,3 @@ if __name__ == "__main__":
     
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
-
