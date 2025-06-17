@@ -1,9 +1,3 @@
-#i am not able to view the camera preview someting like that but when i hit capture button its captureing the pic and i am able to see , i want to stream , the camera so that  would capture proper image , import os
-os.environ["NUMPY_EXPERIMENTAL_ARRAY_FUNCTION"] = "0"
-import numpy as np
-np.__version__ = "1.24.4"  # Force compatibility mode
-
-# Rest of your imports...
 import io
 import tkinter as tk
 from tkinter import Toplevel, messagebox
@@ -12,21 +6,17 @@ from PIL import Image, ImageTk, ImageSequence
 import mysql.connector
 from mysql.connector import Error
 from datetime import datetime
-import threading
 import time
-import RPi.GPIO as GPIO
-from gpiozero import AngularServo, Device
-from gpiozero.pins.pigpio import PiGPIOFactory
-from flask import Flask, send_from_directory
+import lgpio
+import os
+import webbrowser
+from fpdf import FPDF
+import base64
 import smtplib 
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-import lgpio
 from ultralytics import YOLO
-import webbrowser
-from fpdf import FPDF
-from DRV8825 import DRV8825
 
 # Initialize GPIO
 h = lgpio.gpiochip_open(0)
@@ -40,17 +30,14 @@ lgpio.gpio_claim_output(h, SERVO_X_PIN)
 lgpio.gpio_claim_output(h, SERVO_Y_PIN)
 
 class StableServo:
-    def __init__(self, pin, min_angle=-90, max_angle=90):
+    def __init__(self, pin):
         self.pin = pin
-        self.min_angle = min_angle
-        self.max_angle = max_angle
-        self.current_angle = 0
+        self.current_angle = 90
     
     def move_to_angle(self, angle):
-        """Move to specified angle (-90 to 90) and then detach servo signal"""
-        angle = max(self.min_angle, min(self.max_angle, angle))
-        # Convert angle (-90 to 90) to pulse width (1000-2000μs)
-        pulsewidth = int(1500 + (angle / 90.0) * 500)  # 1000-2000μs
+        """Move to specified angle (0-180) and then detach servo signal"""
+        angle = max(0, min(180, angle))
+        pulsewidth = int(500 + (angle / 180.0) * 2000)  # 500-2500μs
         lgpio.tx_servo(h, self.pin, pulsewidth)  # Attach and move servo
         time.sleep(0.3)  # Allow time to reach position
         lgpio.tx_servo(h, self.pin, 0)  # Detach servo (stop PWM signal)
@@ -63,36 +50,19 @@ class StableServo:
 # Initialize servos with stable control
 servo_x = StableServo(SERVO_X_PIN)
 servo_y = StableServo(SERVO_Y_PIN)
-# Initialize PiGPIO
-# Device.pin_factory = PiGPIOFactory()
-class ReportServer:
-    def __init__(self, report_dir):
-        self.app = Flask(__name__)
-        self.report_dir = report_dir
-        self.server_thread = None
-        self.running = False
-        
-        @self.app.route('/reports/<path:filename>')
-        def serve_report(filename):
-            return send_from_directory(self.report_dir, filename)
-    
-    def start(self, port=5000):
-        if not self.running:
-            self.running = True
-            self.server_thread = threading.Thread(
-                target=lambda: self.app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-            )
-            self.server_thread.daemon = True
-            self.server_thread.start()
-    
-    def stop(self):
-        self.running = False
-        if self.server_thread:
-            self.server_thread.join(timeout=1)
-            
-            
-# Custom DRV8825 class (from your working code)
 
+def reset_servos():
+    """Reset servos to center position"""
+    servo_x.move_to_angle(90)
+    servo_y.move_to_angle(90)
+
+def cleanup_servos():
+    """Clean up servo resources"""
+    servo_x.close()
+    servo_y.close()
+    lgpio.gpiochip_close(h)
+
+# Stepper motor control
 MotorDir = [
     'forward',
     'backward',
@@ -102,6 +72,7 @@ ControlMode = [
     'hardward',
     'softward',
 ]
+
 class DRV8825:
     def __init__(self, dir_pin, step_pin, enable_pin, mode_pins):
         self.dir_pin = dir_pin
@@ -125,12 +96,6 @@ class DRV8825:
         self.digital_write(self.enable_pin, 0)
 
     def SetMicroStep(self, mode, stepformat):
-        """
-        (1) mode
-            'hardward' : Use DIP switch
-            'softward' : Use GPIOs to control microstepping
-        (2) stepformat: e.g. 'fullstep', 'halfstep', etc.
-        """
         microstep = {
             'fullstep': (0, 0, 0),
             'halfstep': (1, 0, 0),
@@ -150,19 +115,15 @@ class DRV8825:
 
     def TurnStep(self, Dir, steps, stepdelay=0.005):
         if Dir == MotorDir[0]:  # forward
-            print("turn shaft forward")
             self.digital_write(self.enable_pin, 1)
             self.digital_write(self.dir_pin, 0)
         elif Dir == MotorDir[1]:  # backward
-            print("turn shaft backward")
             self.digital_write(self.enable_pin, 1)
             self.digital_write(self.dir_pin, 1)
         else:
-            print("Direction must be 'forward' or 'backward'")
             self.digital_write(self.enable_pin, 0)
             return
 
-        print("turn step:", steps)
         for _ in range(steps):
             self.digital_write(self.step_pin, 1)
             time.sleep(stepdelay)
@@ -170,59 +131,20 @@ class DRV8825:
             time.sleep(stepdelay)
 
     def cleanup(self):
-        # Optionally disable motor and close chip
         self.Stop()
         lgpio.gpiochip_close(self.h)
+
 # Initialize motor drivers
-MotorX = DRV8825(
-    dir_pin=13,     # STEPPER_X_DIR
-    step_pin=19,    # STEPPER_X_STEP
-    enable_pin=12,
-    mode_pins=(16, 5, 20)
-)
-
-MotorY = DRV8825(
-    dir_pin=24,     # STEPPER_Y_DIR
-    step_pin=18,    # STEPPER_Y_STEP
-    enable_pin=4,
-    mode_pins=(21, 22, 6)
-)
-# Load Haar cascades for face and mouth detection
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-mouth_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_smile.xml')
-
-# Predefined servo positions for each instruction
-# Predefined servo positions for each instruction
-SERVO_POSITIONS = [
-    {'x': 0, 'y': 70},     # Position 1 - Bottom of tongue
-    {'x': 15, 'y': -10},   # Position 2 - Bottom teeth view
-    {'x': 20, 'y': -15},   # Position 3 - Bottom teeth with lower lip pulled down
-    {'x': 25, 'y': -5},    # Position 4 - Cheek side of bottom teeth 2
-    {'x': -25, 'y': -5},   # Position 5 - Cheek side of bottom teeth
-    {'x': 30, 'y': 10},    # Position 6 - Cheek side of top teeth
-    {'x': -30, 'y': 10},   # Position 7 - Cheek side of top teeth 2
-    {'x': 0, 'y': 15},     # Position 8 - Front of tongue
-    {'x': -20, 'y': 5},    # Position 9 - Left side of tongue
-    {'x': 20, 'y': 5},     # Position 10 - Right side of tongue
-    {'x': 0, 'y': 0},      # Position 11 - Smile showing front teeth
-    {'x': 10, 'y': -75},   # Position 12 - Top teeth view
-    {'x': -10, 'y': -75}   # Position 13 - Top teeth with upper lip pulled up
-]
-# Required imports
-from ultralytics import YOLO
-import os
-import webbrowser
-from datetime import datetime
-from fpdf import FPDF
-import base64
-from PIL import Image
-import io
+try:
+    MotorX = DRV8825(dir_pin=13, step_pin=19, enable_pin=25, mode_pins=(16, 5, 20))
+    MotorY = DRV8825(dir_pin=24, step_pin=18, enable_pin=23, mode_pins=(21, 22, 6))
+except Exception as e:
+    print(f"Motor initialization error: {e}")
 
 class ReportGenerator:
     def __init__(self, patient_id, connection):
         self.patient_id = patient_id
         self.connection = connection
-        
         self.model = YOLO("/home/pi/Downloads/best.pt")  # Load your trained YOLO model
         self.results = []  # Will store (img_num, result, original_path, detection_path)
         self.report_html = ""
@@ -432,25 +354,17 @@ class ReportGenerator:
             except Exception as e:
                 print(f"Error deleting temporary file {file_path}: {e}")
 
-
 class ImageCaptureApp:
     def __init__(self, root, emailid):
         self.root = root
         self.emailid = emailid
-        self.patient_id = 1
         self.root.title("Oral Image Capture System")
         self.root.geometry("1300x920+10+10")
         self.root.configure(bg="white")
-        self.reset_servos()
+        
         # Initialize variables
         self.camera_image = None
         self.current_image_index = 0
-        self.tracking_active = True
-        self.auto_capture_active = False
-        self.auto_capture_interval = 2 # seconds
-        self.last_capture_time = 0
-        self.next_capture_time = 0
-        self.current_servo_positions = {'x': 0, 'y': 0}
         self._camera_running = True
         
         # Constants for UI
@@ -554,7 +468,8 @@ class ImageCaptureApp:
         except Error as e:
             messagebox.showerror("Database Error", f"Error: {e}")
             root.destroy()
-             # Get patient ID
+            
+        # Get patient ID
         self.patient_id = self.get_patient_id(emailid)
         if self.patient_id is None:
             messagebox.showerror("Error", "Patient not found in database")
@@ -570,11 +485,12 @@ class ImageCaptureApp:
             messagebox.showerror("Error", "Failed to open USB camera.")
             self.root.destroy()
 
-        # Start camera feed and tracking
+        # Start camera feed
         self.show_camera_feed()
         
         # Center servos initially
-        self.reset_servos()
+        reset_servos()
+
     def get_patient_id(self, email):
         """Get patient ID from database using email"""
         try:
@@ -588,6 +504,7 @@ class ImageCaptureApp:
         finally:
             if 'cursor' in locals():
                 cursor.close()
+
     def setup_ui(self):
         """Set up all UI components"""
         # Left Frame - Instructions and reference images
@@ -625,10 +542,6 @@ class ImageCaptureApp:
         
         # Display first image and instructions
         self.display_left_image()
-    # Add this method to your ImageCaptureApp class
-    def setup_report_server(self):
-        self.report_server = ReportServer("/home/pi/patient_reports")
-        self.report_server.start()
 
     def setup_right_frame(self):
         """Set up the right side with camera feed and status"""
@@ -640,22 +553,10 @@ class ImageCaptureApp:
         self.camera_label = tk.Label(self.right_frame, bg="black")
         self.camera_label.pack()
         
-        # Status and timer display
+        # Status display
         self.status_frame = tk.Frame(self.right_frame, bg="white")
         self.status_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
-        
-        self.tracking_status = tk.Label(self.status_frame, text="Tracking: ACTIVE", 
-                                      font=("times new roman", 14), bg="white", fg="green")
-        self.tracking_status.pack(side=tk.LEFT, padx=10)
-        
-        self.timer_label = tk.Label(self.status_frame, text="Auto Capture: OFF", 
-                                  font=("times new roman", 14), bg="white", fg="black")
-        self.timer_label.pack(side=tk.RIGHT, padx=10)
-    def reset_servos(self):  # Proper instance method definition
-        """Reset servos to center position"""
-        servo_x.move_to_angle(0)
-        servo_y.move_to_angle(0)
-        self.current_servo_positions = {'x': 0, 'y': 0}
+
     def setup_control_buttons(self):
         """Set up the control buttons at the bottom"""
         self.button_frame = tk.Frame(self.right_frame, bg="white")
@@ -678,12 +579,6 @@ class ImageCaptureApp:
                                       bg="lightblue", fg="white", bd=0)
         self.capture_button.pack(side=tk.LEFT, padx=20)
         
-        self.auto_capture_button = tk.Button(self.button_frame, text="Auto Capture OFF", 
-                                           command=self.toggle_auto_capture,
-                                           font=("times new roman", 16, 'bold'), 
-                                           bg="orange", fg="white", bd=0)
-        self.auto_capture_button.pack(side=tk.LEFT, padx=20)
-        
         # Analysis button (hidden until all images are captured)
         self.analysis_button = tk.Button(self.button_frame, text="Analyze Results", 
                                        command=self.show_analysis,
@@ -696,14 +591,14 @@ class ImageCaptureApp:
         if self.current_image_index > 0:
             self.current_image_index -= 1
             self.display_left_image()
-            self.reset_servos()
+            reset_servos()
 
     def next_image(self):
         """Navigate to the next oral image view"""
         if self.current_image_index < len(self.image_list) - 1:
             self.current_image_index += 1
             self.display_left_image()
-            self.reset_servos()
+            reset_servos()
         else:
             self.show_analysis()
 
@@ -777,47 +672,6 @@ class ImageCaptureApp:
             count = (count + 1) % len(frames)
             if hasattr(self, '_camera_running') and self._camera_running:
                 self.root.after(100, lambda: self.animate_gif(frames, count))
-    
-
-    def move_to_position(self, index=None):
-        """Move servos to predefined position for current or specified index"""
-        if index is None:
-            index = self.current_image_index
-        
-        if 0 <= index < len(SERVO_POSITIONS):
-            target_pos = SERVO_POSITIONS[index]
-            servo_x.move_to_angle(target_pos['x'])
-            servo_y.move_to_angle(target_pos['y'])
-            self.current_servo_positions = target_pos.copy()
-            return True
-        return False
-
-    def update_timer_display(self):
-        """Update the auto-capture timer display"""
-        if self.auto_capture_active:
-            remaining = max(0, self.next_capture_time - time.time())
-            self.timer_label.config(text=f"Next auto capture in: {int(remaining)}s", fg="green")
-            self.auto_capture_button.config(text="Auto Capture ON", bg="green")
-        else:
-            self.timer_label.config(text="Auto Capture: OFF", fg="black")
-            self.auto_capture_button.config(text="Auto Capture OFF", bg="orange")
-        
-        if hasattr(self, '_camera_running') and self._camera_running:
-            self.root.after(1000, self.update_timer_display)
-
-    def toggle_auto_capture(self):
-        """Toggle auto-capture mode"""
-        self.auto_capture_active = not self.auto_capture_active
-        if self.auto_capture_active:
-            self.last_capture_time = time.time()
-            self.next_capture_time = self.last_capture_time + self.auto_capture_interval
-            self.tracking_active = False  # Disable tracking when auto-capture starts
-            self.tracking_status.config(text="Tracking: INACTIVE", fg="red")
-            messagebox.showinfo("Auto Capture", f"Auto capture enabled - will capture every {self.auto_capture_interval} seconds")
-        else:
-            self.tracking_active = True  # Re-enable tracking when auto-capture stops
-            self.tracking_status.config(text="Tracking: ACTIVE", fg="green")
-        self.update_timer_display()
 
     def capture_and_show_popup(self):
         """Capture image and show preview popup"""
@@ -895,7 +749,7 @@ class ImageCaptureApp:
         
         tk.Button(button_frame, 
                  text="Save & Next", 
-                 command=lambda: self.save_and_next(popup, self.emailid),
+                 command=lambda: self.save_and_next(popup),
                  font=("Helvetica", 12), 
                  bg="#3498db", 
                  fg="white").pack(side=tk.LEFT, padx=10)
@@ -903,69 +757,10 @@ class ImageCaptureApp:
         popup.attributes('-topmost', True)
         popup.grab_set()
 
-    def auto_capture_image(self):
-        """Automatically capture image at predefined position"""
-        try:
-            # Move to predefined position for this image
-            if self.current_image_index + 1 < len(self.image_list):
-                self.current_image_index += 1
-                self.display_left_image()
-                self.last_capture_time = time.time()
-                self.next_capture_time = self.last_capture_time + self.auto_capture_interval
-            else:
-                # All images captured - stop auto-capture and camera
-                self.auto_capture_active = False
-                self._camera_running = False
-                if hasattr(self, 'cap'):
-                    self.cap.release()
-                self.update_timer_display()
-                self.show_analysis()
-            if not self.move_to_position():
-                messagebox.showerror("Error", "Invalid position for auto-capture")
-                return
-
-            time.sleep(1)  # Wait for servos to move
-
-            ret, frame = self.cap.read()
-            if not ret:
-                messagebox.showerror("Error", "Failed to capture image from USB camera.")
-                return
-
-            # Convert and process the image
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(frame_rgb)
-            
-            # Store the image
-            self.captured_image_pil = pil_image.resize((self.IMAGE_CAPTURE_VIEWER_WIDTH, self.IMAGE_CAPTURE_VIEWER_HEIGHT), 
-                                                     resample=Image.LANCZOS)
-            self.original_captured_image = pil_image
-
-            # Visual feedback
-            self.flash_screen()
-            
-            # Auto-save
-            self.save_current_image(auto_save=True)
-            
-            # Move to next image automatically
-            if self.current_image_index + 1 < len(self.image_list):
-                self.current_image_index += 1
-                self.display_left_image()
-                self.last_capture_time = time.time()
-                self.next_capture_time = self.last_capture_time + self.auto_capture_interval
-            else:
-                # All images captured - stop auto-capture
-                self.auto_capture_active = False
-                self.update_timer_display()
-                self.show_analysis()
-    
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to auto-capture image: {str(e)}")
-
-    def save_current_image(self, popup=None, auto_save=False):
+    def save_current_image(self, popup=None):
         """Save current image to database"""
         if not hasattr(self, 'captured_image_pil'):
-            if not auto_save:
-                messagebox.showerror("Error", "No image to save. Please capture an image first.")
+            messagebox.showerror("Error", "No image to save. Please capture an image first.")
             return
             
         try:
@@ -989,21 +784,19 @@ class ImageCaptureApp:
             cursor.execute(query, (self.patient_id, self.current_image_index + 1, image_bytes, image_identifier))
             self.connection.commit()
             
-            if not auto_save:
-                messagebox.showinfo("Success", "Image saved successfully.")
+            messagebox.showinfo("Success", "Image saved successfully.")
             
             if popup:
                 popup.destroy()
                 
         except Exception as e:
-            if not auto_save:
-                messagebox.showerror("Database Error", f"Failed to save image: {str(e)}")
+            messagebox.showerror("Database Error", f"Failed to save image: {str(e)}")
         finally:
             if 'cursor' in locals():
                 cursor.close()
 
-    def save_and_next(self, popup, emailid):
-        #"""Save current image and move to next position"""
+    def save_and_next(self, popup):
+        """Save current image and move to next position"""
         try:
             # Convert image to bytes
             image_bytes_io = io.BytesIO()
@@ -1034,18 +827,15 @@ class ImageCaptureApp:
             popup.destroy()
 
             # Move to next image or finish
-            # Move to next image or finish
             if self.current_image_index + 1 < len(self.image_list):
                 self.current_image_index += 1
                 self.display_left_image()
-                self.move_to_position()
             else:
                 # All images captured - stop camera
                 self._camera_running = False
                 if hasattr(self, 'cap'):
                     self.cap.release()
                 self.show_analysis()
-                    
 
     def get_next_identifier(self, phone_number, current_datetime, patient_id):
         """Generate unique identifier for saved images"""
@@ -1100,14 +890,13 @@ class ImageCaptureApp:
                                          length=920, mode="determinate")
         self.progress.pack()
         self.progress["value"] = 0
-        self._progress_active = True  # Add this flag
+        self._progress_active = True
         self.update_progress()
         
         # Hide navigation buttons
         self.prev_button.pack_forget()
         self.next_button.pack_forget()
         self.capture_button.pack_forget()
-        self.auto_capture_button.pack_forget()
         
         # Show thank you message after delay
         self.root.after(5000, self.show_thank_you)
@@ -1173,10 +962,10 @@ class ImageCaptureApp:
         try:
             with open(report_path, 'r') as f:
                 html_content = f.read()
-                # Basic HTML stripping for display (you might want to improve this)
-                text_content = html_content.replace('<', ' <').replace('>', '> ')  # Simple space addition to separate tags
+                # Basic HTML stripping for display
+                text_content = html_content.replace('<', ' <').replace('>', '> ')
                 self.report_text.insert(tk.END, text_content)
-                self.report_text.config(state=tk.DISABLED)  # Make it read-only
+                self.report_text.config(state=tk.DISABLED)
         except Exception as e:
             print(f"Error loading report: {e}")
             self.report_text.insert(tk.END, "Could not load report content")
@@ -1187,15 +976,15 @@ class ImageCaptureApp:
         
         # Add buttons
         tk.Button(button_frame, 
-                  text="View in Browser", 
-                  command=lambda: webbrowser.open(f"http://localhost:5000/reports/{report_filename}"),
+                  text="View Full Report", 
+                  command=lambda: webbrowser.open(report_path),
                   font=("times new roman", 14), 
                   bg="#3498db", 
                   fg="white").pack(side=tk.LEFT, padx=10)
         
         tk.Button(button_frame, 
                   text="Download PDF", 
-                  command=lambda: webbrowser.open(f"file://{pdf_path}"),
+                  command=lambda: webbrowser.open(pdf_path),
                   font=("times new roman", 14), 
                   bg="#2ecc71", 
                   fg="white").pack(side=tk.LEFT, padx=10)
@@ -1214,7 +1003,6 @@ class ImageCaptureApp:
                   bg="#e74c3c", 
                   fg="white").pack(side=tk.LEFT, padx=10)
 
-    # Add this method to your ImageCaptureApp class for email functionality
     def send_email_report(self, pdf_path):
         """Send the PDF report via email"""
         try:
@@ -1227,11 +1015,11 @@ class ImageCaptureApp:
                 messagebox.showerror("Error", "No email found for this patient")
                 return
             
-            # Email configuration (you'll need to set these up)
-            smtp_server = "smtp.gmail.com"  # Example with Gmail
+            # Email configuration
+            smtp_server = "smtp.gmail.com"
             smtp_port = 587
             sender_email = "rakeshozon46@gmail.com"
-            sender_password = "knovzqbmcryhoznh"  # Consider using app-specific password
+            sender_password = "knovzqbmcryhoznh"
             
             # Create message
             msg = MIMEMultipart()
@@ -1242,8 +1030,8 @@ class ImageCaptureApp:
             # Email body
             body = """Please find attached your oral health examination report.
             
-    Best regards,
-    Your Dental Clinic"""
+Best regards,
+Your Dental Clinic"""
             msg.attach(MIMEText(body, 'plain'))
             
             # Attach PDF
@@ -1264,166 +1052,6 @@ class ImageCaptureApp:
         finally:
             if 'cursor' in locals():
                 cursor.close()
-            # Add this method to your ImageCaptureApp class for email functionality
-    def send_email_report(self, pdf_path):
-        """Send the PDF report via email"""
-        try:
-            # Get patient email from database
-            cursor = self.connection.cursor()
-            cursor.execute("SELECT email FROM patient WHERE id = %s", (self.patient_id,))
-            patient_email = cursor.fetchone()[0]
-            
-            if not patient_email:
-                messagebox.showerror("Error", "No email found for this patient")
-                return
-            
-            # Email configuration (you'll need to set these up)
-            smtp_server = "smtp.gmail.com"  # Example with Gmail
-            smtp_port = 587
-            sender_email = "your_email@gmail.com"
-            sender_password = "your_password"  # Consider using app-specific password
-            
-            # Create message
-            msg = MIMEMultipart()
-            msg['From'] = sender_email
-            msg['To'] = patient_email
-            msg['Subject'] = "Your Oral Health Report"
-            
-            # Email body
-            body = """Please find attached your oral health examination report.
-            
-    Best regards,
-    Your Dental Clinic"""
-            msg.attach(MIMEText(body, 'plain'))
-            
-            # Attach PDF
-            with open(pdf_path, "rb") as f:
-                attach = MIMEApplication(f.read(), _subtype="pdf")
-                attach.add_header('Content-Disposition', 'attachment', filename=os.path.basename(pdf_path))
-                msg.attach(attach)
-            
-            # Send email
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(sender_email, sender_password)
-                server.send_message(msg)
-            
-            messagebox.showinfo("Success", "Report sent successfully via email")
-        except Exception as e:
-            messagebox.showerror("Email Error", f"Failed to send email: {str(e)}")
-        finally:
-            if 'cursor' in locals():
-                cursor.close()
-    
-    def cleanup_and_exit(self):
-        """Clean up resources and exit"""
-        self.cleanup()
-        self.root.destroy()
-
-    def process_frame_for_tracking(self, frame):
-        """Process frame for face tracking and motor control"""
-        frame_height, frame_width = frame.shape[:2]
-        center_x = frame_width // 2
-        center_y = frame_height // 2
-
-        if self.tracking_active:
-            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-            
-            for (x, y, w, h) in faces:
-                # Draw face bounding box
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-
-                # Get face center
-                face_center_x = x + w // 2
-                face_center_y = y + h // 2
-
-                # Calculate offsets from center
-                offset_x = face_center_x - center_x
-                offset_y = face_center_y - center_y
-
-                # Adjust motors based on offset
-                self.adjust_motors(offset_x, offset_y)
-
-                # Mouth detection
-                roi_gray = gray[y + h//2:y + h, x:x + w]
-                mouths = mouth_cascade.detectMultiScale(roi_gray, 1.7, 11)
-
-                for (mx, my, mw, mh) in mouths:
-                    mouth_x = x + mx + mw // 2
-                    mouth_y = y + h//2 + my + mh // 2
-                    
-                    # Fine-tune alignment to mouth
-                    mouth_offset_x = mouth_x - center_x
-                    mouth_offset_y = mouth_y - center_y
-
-                    if abs(mouth_offset_x) > 10:
-                        self.adjust_motors(mouth_offset_x, 0, fine_tune=True)
-                    if abs(mouth_offset_y) > 10:
-                        self.adjust_motors(0, mouth_offset_y, fine_tune=True)
-                    break  # Process only one mouth
-
-        # Draw center lines
-        cv2.line(frame, (0, center_y), (frame_width, center_y), (0, 255, 255), 1)
-        cv2.line(frame, (center_x, 0), (center_x, frame_height), (0, 255, 255), 1)
-        
-        return frame
-
-    def adjust_motors(self, offset_x, offset_y, fine_tune=False):
-        """Adjust both servos and steppers based on offset"""
-        # Servo adjustments
-        if abs(offset_x) > (10 if fine_tune else 20):
-            adjustment = -1 if offset_x > 0 else 1
-            if fine_tune:
-                adjustment *= 0.5  # Smaller adjustments for fine tuning
-            new_angle_x = max(-90, min(90, servo_x.current_angle + adjustment))
-            servo_x.move_to_angle(new_angle_x)
-            self.current_servo_positions['x'] = new_angle_x
-            
-            # Stepper motor adjustment remains the same
-            steps = int(abs(offset_x)/5)
-            if steps > 0:
-                MotorX.SetMicroStep('software', '1/8step')
-                MotorX.TurnStep(
-                    Dir='forward' if offset_x < 0 else 'backward',
-                    steps=steps,
-                    stepdelay=0.001 if fine_tune else 0.002
-                )
-                MotorX.Stop()
-        
-        if abs(offset_y) > (10 if fine_tune else 20):
-            adjustment = -1 if offset_y > 0 else 1
-            if fine_tune:
-                adjustment *= 0.5  # Smaller adjustments for fine tuning
-            new_angle_y = max(-90, min(90, servo_y.current_angle + adjustment))
-            servo_y.move_to_angle(new_angle_y)
-            self.current_servo_positions['y'] = new_angle_y
-            
-            # Stepper motor adjustment remains the same
-            steps = int(abs(offset_y)/5)
-            if steps > 0:
-                MotorY.SetMicroStep('software', '1/8step')
-                MotorY.TurnStep(
-                    Dir='forward' if offset_y < 0 else 'backward',
-                    steps=steps,
-                    stepdelay=0.001 if fine_tune else 0.002
-                )
-                MotorY.Stop()
-
-
-    def update_camera_display(self, imgtk):
-        """Update camera display in main thread"""
-        if hasattr(self, 'camera_label'):
-            self.camera_label.imgtk = imgtk  # Keep reference
-            self.camera_label.config(image=imgtk)
-
-    def flash_screen(self):
-        """Briefly flash the camera display to indicate capture"""
-        original_bg = self.camera_label.cget('bg')
-        self.camera_label.config(bg='white')
-        self.root.update()
-        time.sleep(0.1)
-        self.camera_label.config(bg=original_bg)
 
     def show_camera_feed(self):
         """Show live camera feed with thread-safe updates"""
@@ -1437,20 +1065,18 @@ class ImageCaptureApp:
             try:
                 ret, frame = self.cap.read()
                 if ret:
-                    # Handle auto-capture timing
-                    current_time = time.time()
-                    if self.auto_capture_active and current_time >= self.next_capture_time:
-                        self.last_capture_time = current_time
-                        self.next_capture_time = current_time + self.auto_capture_interval
-                        self.auto_capture_image()
-
-                    # Process frame
-                    frame_rgb = self._process_frame(frame)
+                    # Convert color space
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    
+                    # Resize for display
+                    frame_rgb = cv2.resize(frame_rgb, (640, 480))
+                    
+                    # Convert to PhotoImage
+                    img = Image.fromarray(frame_rgb)
+                    imgtk = ImageTk.PhotoImage(image=img)
                     
                     # Update display
-                    if frame_rgb is not None:
-                        img = Image.fromarray(frame_rgb)
-                        imgtk = ImageTk.PhotoImage(image=img)
+                    if hasattr(self, 'camera_label'):
                         self.camera_label.imgtk = imgtk
                         self.camera_label.config(image=imgtk)
                     
@@ -1458,93 +1084,13 @@ class ImageCaptureApp:
                 print(f"Camera error: {e}")
             
             # Schedule next update
-            self.root.after(30, self._update_camera_feed)  # ~30 FPS
+            self.root.after(30, self._update_camera_feed)
 
-    def _process_frame(self, frame):
-        """Process frame for display"""
-        try:
-            # Convert color space
-            if len(frame.shape) == 2:  # Grayscale
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-            else:  # BGR
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Face detection and tracking
-            frame = self.process_frame_for_tracking(frame)
-            
-            # Resize for display
-            return cv2.resize(frame, (640, 480))
-        except Exception as e:
-            print(f"Frame processing error: {e}")
-            return None
+    def cleanup_and_exit(self):
+        """Clean up resources and exit"""
+        self.cleanup()
+        self.root.destroy()
 
-def update_camera_display(self, frame_rgb):
-    """Update camera display in main thread"""
-    if not getattr(self, '_camera_running', False):
-        return
-        
-    try:
-        # Convert to PhotoImage
-        img = Image.fromarray(frame_rgb)
-        imgtk = ImageTk.PhotoImage(image=img)
-        
-        # Update display
-        if hasattr(self, 'camera_label'):
-            self.camera_label.imgtk = imgtk  # Keep reference
-            self.camera_label.config(image=imgtk)
-    except Exception as e:
-        print(f"Display update error: {e}")
-
-    # Remove the duplicate send_email_report method (keep only one)
-    def send_email_report(self, pdf_path):
-        """Send the PDF report via email"""
-        try:
-            # Get patient email from database
-            cursor = self.connection.cursor()
-            cursor.execute("SELECT email FROM patient WHERE id = %s", (self.patient_id,))
-            patient_email = cursor.fetchone()[0]
-            
-            if not patient_email:
-                messagebox.showerror("Error", "No email found for this patient")
-                return
-            
-            # Email configuration (you'll need to set these up)
-            smtp_server = "smtp.gmail.com"  # Example with Gmail
-            smtp_port = 587
-            sender_email = "rakeshozon46@gmail.com"
-            sender_password = "knovzqbmcryhoznh"  # Consider using app-specific password
-            
-            # Create message
-            msg = MIMEMultipart()
-            msg['From'] = sender_email
-            msg['To'] = patient_email
-            msg['Subject'] = "Your Oral Health Report"
-            
-            # Email body
-            body = """Please find attached your oral health examination report.
-            
-    Best regards,
-    Your Dental Clinic"""
-            msg.attach(MIMEText(body, 'plain'))
-            
-            # Attach PDF
-            with open(pdf_path, "rb") as f:
-                attach = MIMEApplication(f.read(), _subtype="pdf")
-                attach.add_header('Content-Disposition', 'attachment', filename=os.path.basename(pdf_path))
-                msg.attach(attach)
-            
-            # Send email
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(sender_email, sender_password)
-                server.send_message(msg)
-            
-            messagebox.showinfo("Success", "Report sent successfully via email")
-        except Exception as e:
-            messagebox.showerror("Email Error", f"Failed to send email: {str(e)}")
-        finally:
-            if 'cursor' in locals():
-                cursor.close()
     def cleanup(self):
         """Clean up resources before closing"""
         self._camera_running = False
@@ -1553,23 +1099,18 @@ def update_camera_display(self, frame_rgb):
             self.cap.release()
         
         # Clean up servos
-        servo_x.close()
-        servo_y.close()
+        cleanup_servos()
         
         # Clean up motors
-        MotorX.Stop()
-        MotorY.Stop()
-        
-        # Clean up GPIO
-        GPIO.cleanup()
+        MotorX.cleanup()
+        MotorY.cleanup()
         
         if hasattr(self, 'connection') and self.connection:
             self.connection.close()
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = ImageCaptureApp(root, "example@example.com")
-    app.setup_report_server()  # Fixed: call on app instance
+    app = ImageCaptureApp(root, "example@example.com")  # Replace with actual email
     
     def on_closing():
         app.cleanup()
@@ -1577,5 +1118,3 @@ if __name__ == "__main__":
     
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
-
-#there is no error its working good.
