@@ -8,7 +8,7 @@ MotorDir = [
 
 ControlMode = [
     'hardward',
-    'softward'
+    'softward',
 ]
 
 class HR8825():
