@@ -1,6 +1,6 @@
 import io
 import tkinter as tk
-from tkinter import Toplevel, messagebox, ttk
+from tkinter import Toplevel, messagebox, ttk, filedialog
 import cv2
 from PIL import Image, ImageTk, ImageSequence
 import mysql.connector
@@ -72,6 +72,7 @@ def cleanup_servos():
     servo_x.close()
     servo_y.close()
     lgpio.gpiochip_close(h)
+
 try:
     # MotorY: Vertical movement (Y-axis)
     MotorY = HR8825(
@@ -112,6 +113,7 @@ def stepper_move_y(steps):
         MotorY.TurnStep(Dir=direction, steps=abs(steps), stepdelay=0.005)
     except Exception as e:
         print(f"Error moving Y stepper: {e}")
+
 class ReportGenerator:
     def __init__(self, patient_id, connection):
         self.patient_id = patient_id
@@ -331,55 +333,41 @@ class ImageCaptureApp:
         self.root = root
         self.emailid = emailid
         
-        # Get screen dimensions for responsive layout
-        screen_width = root.winfo_screenwidth()
-        screen_height = root.winfo_screenheight()
-        
-        # Set window to full screen or reasonable size
-        if screen_width > 1400 and screen_height > 900:
-            self.root.geometry("1400x900")
-        else:
-            # Use 90% of screen size if smaller than default
-            self.root.geometry(f"{int(screen_width*0.9)}x{int(screen_height*0.9)}")
-        
+        # Configure window properties
         self.root.title("Oral Image Capture System")
-        self.root.configure(bg="#f0f2f5")
-        
-        # Make the window maximized by default
-        self.root.state('iconic')  # This will maximize the window
+        self.root.geometry("1200x800")
+        self.root.minsize(1000, 700)
+        self.root.configure(bg="#f5f5f5")
+        self.root.attributes('-fullscreen', True)
+    
+        # Add escape key to exit fullscreen
+        self.root.bind('<Escape>', lambda e: self.root.attributes('-fullscreen', False))
+        # Make window resizable and movable
+        self.root.resizable(True, True)
         
         # Style configuration
         self.style = ttk.Style()
-        self.style.configure('TFrame', background="#f0f2f5")
-        self.style.configure('TLabel', background="#f0f2f5", font=('Arial', 11))
-        self.style.configure('TButton', font=('Arial', 11), padding=5)
-        self.style.configure('Title.TLabel', font=('Arial', 14, 'bold'))
-        self.style.configure('Header.TLabel', font=('Arial', 12, 'bold'))
-        self.style.configure('Accent.TButton', foreground='white', background='#3498db', font=('Arial', 11, 'bold'))
+        self.style.theme_use('clam')
+        
+        # Configure styles
+        self.style.configure('.', background="#f5f5f5", font=('Helvetica', 10))
+        self.style.configure('TFrame', background="#f5f5f5")
+        self.style.configure('TLabel', background="#f5f5f5", font=('Helvetica', 10))
+        self.style.configure('TButton', font=('Helvetica', 10), padding=5)
+        self.style.configure('Title.TLabel', font=('Helvetica', 14, 'bold'), foreground="#2c3e50")
+        self.style.configure('Header.TLabel', font=('Helvetica', 11, 'bold'), foreground="#34495e")
+        self.style.configure('Accent.TButton', foreground='white', background='#3498db', font=('Helvetica', 10, 'bold'))
+        self.style.map('Accent.TButton', 
+                      background=[('active', '#2980b9'), ('disabled', '#bdc3c7')])
         
         # Initialize variables
         self.current_image_index = 0
         self._camera_running = True
+        self.captured_images_dir = "/home/pi/patient_images"
+        #self.display_current_view() 
+        # Create directory for captured images if it doesn't exist
+        os.makedirs(self.captured_images_dir, exist_ok=True)
         
-        # Constants for UI (will be adjusted dynamically)
-        self.IMAGE_WIDTH = 350  # Will be adjusted based on window size
-        self.IMAGE_HEIGHT = 250
-        self.CAMERA_WIDTH = 640
-        self.CAMERA_HEIGHT = 480
-        
-        # Style configuration
-        self.style = ttk.Style()
-        self.style.configure('TFrame', background="#f0f2f5")
-        self.style.configure('TLabel', background="#f0f2f5", font=('Arial', 11))
-        self.style.configure('TButton', font=('Arial', 11), padding=5)
-        self.style.configure('Title.TLabel', font=('Arial', 14, 'bold'))
-        self.style.configure('Header.TLabel', font=('Arial', 12, 'bold'))
-        
-        # Initialize variables
-        self.current_image_index = 0
-        self._camera_running = True
-      
-              
         # Image and instruction data
         self.image_list = [
             r"/home/pi/Downloads/Patient_app/Oral images samples/Oral images samples/Bottom of tongue_29092023_final.png",
@@ -462,7 +450,7 @@ class ImageCaptureApp:
             '''1. Natural lighting is preferred, ensure that the light source is in the opposite direction of the mouth
 2. Say "aaah!" open mouth wide/big
 3. Tilt head backward''']
-        
+       
         # Setup database connection
         self.setup_database()
         
@@ -474,7 +462,10 @@ class ImageCaptureApp:
         
         # Center servos initially
         reset_servos()
-    
+        
+        # Bind window events
+        self.root.bind("<Configure>", self.on_window_resize)
+       
     def get_patient_id(self, email):
         """Get patient ID from database using email"""
         try:
@@ -506,30 +497,45 @@ class ImageCaptureApp:
         except Error as e:
             messagebox.showerror("Database Error", f"Error: {e}")
             self.root.destroy()
+
     def on_window_resize(self, event):
         """Handle window resize events to adjust UI elements"""
         if event.widget == self.root:
-            # Calculate new sizes based on window dimensions
-            window_width = self.root.winfo_width()
-            window_height = self.root.winfo_height()
+            # Update UI elements based on new window size
+            self.update_ui_sizes()
+    
+    def update_ui_sizes(self):
+        """Update UI element sizes based on current window size"""
+        window_width = self.root.winfo_width()
+        window_height = self.root.winfo_height()
+        
+        # Adjust reference image and GIF sizes
+        ref_width = max(200, min(400, int(window_width * 0.2)))
+        ref_height = max(150, min(300, int(ref_width * 0.75)))
+        
+        # Update reference image if it exists
+        if hasattr(self, 'ref_image_label') and hasattr(self.ref_image_label, 'image'):
+            img_path = self.image_list[self.current_image_index]
+            img = Image.open(img_path)
+            img = img.resize((ref_width, ref_height), Image.LANCZOS)
+            img_tk = ImageTk.PhotoImage(img)
             
-            # Adjust image sizes proportionally
-            self.IMAGE_WIDTH = max(200, min(400, int(window_width * 0.15)))
-            self.IMAGE_HEIGHT = max(150, min(300, int(window_height * 0.25)))
-            
-            # Update displayed images if they exist
-            if hasattr(self, 'ref_image_label') and hasattr(self.ref_image_label, 'image'):
-                self.display_current_view()
-            
-            # Adjust camera size if needed
-            self.CAMERA_WIDTH = max(400, min(800, int(window_width * 0.4)))
-            self.CAMERA_HEIGHT = max(300, min(600, int(self.CAMERA_WIDTH * 0.75)))
-            
-            # Update camera feed if it exists
-            if hasattr(self, 'cap') and self.cap.isOpened():
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
-   
+            self.ref_image_label.config(image=img_tk)
+            self.ref_image_label.image = img_tk
+        
+        # Update GIF if it exists
+        if hasattr(self, 'gif_label') and hasattr(self.gif_label, 'image'):
+            gif_path = self.gif_list[self.current_image_index]
+            self.animate_gif(gif_path, ref_width, ref_height)
+        
+        # Adjust camera size
+        cam_width = max(400, min(800, int(window_width * 0.4)))
+        cam_height = max(300, min(600, int(cam_width * 0.75)))
+        
+        if hasattr(self, 'cap') and self.cap.isOpened():
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_height)
+
     def setup_ui(self):
         """Set up all UI components with responsive layout"""
         # Main container using grid for responsive layout
@@ -544,33 +550,30 @@ class ImageCaptureApp:
         self.main_container.grid_rowconfigure(1, weight=0)     # Bottom controls (fixed height)
         
         # Left Panel (Reference Images and GIF)
-        left_panel = ttk.Frame(self.main_container)
+        left_panel = ttk.Frame(self.main_container, style='TFrame')
         left_panel.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        left_panel.grid_propagate(False)
         
         # Configure left panel grid
         left_panel.grid_rowconfigure(0, weight=1)  # Reference image
         left_panel.grid_rowconfigure(1, weight=1)  # GIF
         left_panel.grid_columnconfigure(0, weight=1)
         
-        # Reference image
+        # Reference image frame
         ref_frame = ttk.LabelFrame(left_panel, text="Reference Image", style='Header.TLabel')
         ref_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        ref_frame.grid_propagate(False)
         
         self.ref_image_label = ttk.Label(ref_frame)
         self.ref_image_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # GIF demonstration
+        # GIF demonstration frame
         gif_frame = ttk.LabelFrame(left_panel, text="Demonstration", style='Header.TLabel')
         gif_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-        gif_frame.grid_propagate(False)
         
         self.gif_label = ttk.Label(gif_frame)
         self.gif_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Middle Panel (Instructions)
-        middle_panel = ttk.Frame(self.main_container)
+        middle_panel = ttk.Frame(self.main_container, style='TFrame')
         middle_panel.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
         
         # Instructions frame with scrollbar
@@ -600,14 +603,14 @@ class ImageCaptureApp:
         self.instructions_label = ttk.Label(
             scrollable_frame,
             text="",
-            wraplength=400,  # Will adjust with window size
+            wraplength=400,
             justify="left",
-            font=('Arial', 11)
+            font=('Helvetica', 10)
         )
         self.instructions_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Right Panel (Camera and Controls)
-        right_panel = ttk.Frame(self.main_container)
+        right_panel = ttk.Frame(self.main_container, style='TFrame')
         right_panel.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
         
         # Configure right panel grid
@@ -615,7 +618,7 @@ class ImageCaptureApp:
         right_panel.grid_rowconfigure(1, weight=2)  # Controls
         right_panel.grid_columnconfigure(0, weight=1)
         
-        # Camera feed
+        # Camera feed frame
         camera_frame = ttk.LabelFrame(right_panel, text="Camera Feed", style='Header.TLabel')
         camera_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         
@@ -623,7 +626,7 @@ class ImageCaptureApp:
         self.camera_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Motor controls frame
-        controls_frame = ttk.Frame(right_panel)
+        controls_frame = ttk.Frame(right_panel, style='TFrame')
         controls_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
         
         # Configure controls frame grid
@@ -631,7 +634,7 @@ class ImageCaptureApp:
         controls_frame.grid_rowconfigure(0, weight=1)  # Servo controls
         controls_frame.grid_rowconfigure(1, weight=1)  # Stepper controls
         
-        # Servo controls
+        # Servo controls frame
         servo_frame = ttk.LabelFrame(controls_frame, text="Servo Controls", style='Header.TLabel')
         servo_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         
@@ -698,7 +701,7 @@ class ImageCaptureApp:
                   width=8).grid(row=2, column=1, padx=5, pady=2)
         
         # Bottom Controls (Navigation and Capture)
-        bottom_frame = ttk.Frame(self.main_container)
+        bottom_frame = ttk.Frame(self.main_container, style='TFrame')
         bottom_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=10)
         
         # Configure grid for bottom controls
@@ -736,184 +739,9 @@ class ImageCaptureApp:
         
         # Initially disable previous button
         self.prev_btn.config(state=tk.DISABLED)
-
-    def setup_left_panel(self):
-        """Left panel with instructions and reference images"""
-        # Main frame
-        self.left_frame = ttk.Frame(self.root, width=450)
-        self.left_frame.pack_propagate(False)
-        self.left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
         
-        # Title
-        ttk.Label(self.left_frame, text="Capture Guide", style='Title.TLabel').pack(pady=10)
-        
-        # Reference image display
-        ref_img_frame = ttk.LabelFrame(self.left_frame, text="Reference Image", style='Header.TLabel')
-        ref_img_frame.pack(fill=tk.X, pady=5, padx=5)
-        
-        self.ref_image_label = ttk.Label(ref_img_frame)
-        self.ref_image_label.pack(pady=5)
-        
-        # GIF demonstration
-        gif_frame = ttk.LabelFrame(self.left_frame, text="Demonstration", style='Header.TLabel')
-        gif_frame.pack(fill=tk.X, pady=5, padx=5)
-        
-        self.gif_label = ttk.Label(gif_frame)
-        self.gif_label.pack(pady=5)
-        
-        # Instructions frame
-        instr_frame = ttk.LabelFrame(self.left_frame, text="Instructions", style='Header.TLabel')
-        instr_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
-        
-        # Scrollable instructions
-        instr_canvas = tk.Canvas(instr_frame, bg="#ffffff", highlightthickness=0)
-        scrollbar = ttk.Scrollbar(instr_frame, orient="vertical", command=instr_canvas.yview)
-        self.instructions_scroll_frame = ttk.Frame(instr_canvas)
-        
-        instr_canvas.configure(yscrollcommand=scrollbar.set)
-        instr_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        instr_canvas.create_window((0, 0), window=self.instructions_scroll_frame, anchor="nw")
-        
-        self.instructions_scroll_frame.bind(
-            "<Configure>",
-            lambda e: instr_canvas.configure(scrollregion=instr_canvas.bbox("all"))
-        )
-        
-        self.instructions_label = ttk.Label(
-            self.instructions_scroll_frame,
-            text="",
-            wraplength=400,
-            justify="left"
-        )
-        self.instructions_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-    def setup_right_panel(self):
-        """Right panel with camera feed and controls"""
-        self.right_frame = ttk.Frame(self.root)
-        self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Camera feed display
-        camera_frame = ttk.LabelFrame(self.right_frame, text="Camera Feed", style='Header.TLabel')
-        camera_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        self.camera_label = ttk.Label(camera_frame)
-        self.camera_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Motor controls
-        self.setup_motor_controls()
-
-    def setup_motor_controls(self):
-        """Setup servo and stepper motor controls"""
-        # Servo Control Frame
-        servo_frame = ttk.LabelFrame(self.right_frame, text="Servo Controls", style='Header.TLabel')
-        servo_frame.pack(fill=tk.X, pady=5)
-        
-        # Pan (X-axis) controls
-        pan_frame = ttk.Frame(servo_frame)
-        pan_frame.pack(side=tk.LEFT, padx=10, pady=5)
-        
-        ttk.Label(pan_frame, text="Pan (X-axis)").pack()
-        
-        btn_frame = ttk.Frame(pan_frame)
-        btn_frame.pack()
-        
-        ttk.Button(btn_frame, text="◄ Left", 
-                  command=lambda: move_servo_x(-10), 
-                  width=8).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="Right ►", 
-                  command=lambda: move_servo_x(10), 
-                  width=8).pack(side=tk.LEFT, padx=2)
-        
-        # Tilt (Y-axis) controls
-        tilt_frame = ttk.Frame(servo_frame)
-        tilt_frame.pack(side=tk.LEFT, padx=10, pady=5)
-        
-        ttk.Label(tilt_frame, text="Tilt (Y-axis)").pack()
-        
-        btn_frame = ttk.Frame(tilt_frame)
-        btn_frame.pack()
-        
-        ttk.Button(btn_frame, text="▲ Up", 
-                  command=lambda: move_servo_y(-10), 
-                  width=8).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="▼ Down", 
-                  command=lambda: move_servo_y(10), 
-                  width=8).pack(side=tk.LEFT, padx=2)
-        
-        # Reset button
-        ttk.Button(servo_frame, text="Reset", 
-                  command=reset_servos,
-                  style='Accent.TButton').pack(side=tk.RIGHT, padx=10)
-        
-        # Stepper Motor Frame
-        stepper_frame = ttk.LabelFrame(self.right_frame, text="Stepper Motor Controls", style='Header.TLabel')
-        stepper_frame.pack(fill=tk.X, pady=5)
-        
-        # Movement buttons
-        control_frame = ttk.Frame(stepper_frame)
-        control_frame.pack(pady=5)
-        
-        # Create a grid layout for the stepper controls
-        ttk.Button(control_frame, text="▲ Up", 
-                  command=lambda: stepper_move_y(-100), 
-                  width=8).grid(row=0, column=1, padx=5, pady=2)
-        ttk.Button(control_frame, text="◄ Left", 
-                  command=lambda: stepper_move_x(-100), 
-                  width=8).grid(row=1, column=0, padx=5, pady=2)
-        ttk.Button(control_frame, text="▼ Down", 
-                  command=lambda: stepper_move_y(100), 
-                  width=8).grid(row=2, column=1, padx=5, pady=2)
-        ttk.Button(control_frame, text="Right ►", 
-                  command=lambda: stepper_move_x(100), 
-                  width=8).grid(row=1, column=2, padx=5, pady=2)
-        
-        # Center button (can be used for reset or other functions)
-        ttk.Button(control_frame, text="Center", 
-                  command=reset_servos,
-                  width=8).grid(row=1, column=1, padx=5, pady=2)
-
-    def setup_bottom_controls(self):
-        """Setup navigation and capture buttons"""
-        self.control_frame = ttk.Frame(self.root)
-        self.control_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10, padx=10)
-        
-        # Navigation buttons
-        self.prev_btn = ttk.Button(
-            self.control_frame,
-            text="◄ Previous",
-            command=self.prev_image,
-            width=12
-        )
-        self.prev_btn.pack(side=tk.LEFT, padx=10)
-        
-        self.next_btn = ttk.Button(
-            self.control_frame,
-            text="Next ►",
-            command=self.next_image,
-            width=12
-        )
-        self.next_btn.pack(side=tk.LEFT, padx=10)
-        
-        # Spacer
-        ttk.Frame(self.control_frame, width=20).pack(side=tk.LEFT)
-        
-        # Capture button
-        self.capture_btn = ttk.Button(
-            self.control_frame,
-            text="Capture Image",
-            command=self.capture_image,
-            style='Accent.TButton',
-            width=15
-        )
-        self.capture_btn.pack(side=tk.LEFT, padx=10)
-        
-        # Initially disable previous button
-        self.prev_btn.config(state=tk.DISABLED)
-        
-        # Add some styling for the buttons
-        self.style.configure('Accent.TButton', foreground='white', background='#3498db', font=('Arial', 11, 'bold'))
+        # Display the first view
+        self.display_current_view()
 
     def setup_camera(self):
         """Initialize USB camera"""
@@ -923,42 +751,64 @@ class ImageCaptureApp:
             self.root.destroy()
             return
         
-        # Set camera resolution
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
+        # Set initial camera resolution
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         
         # Start camera feed
         self.update_camera_feed()
 
     def update_camera_feed(self):
         """Update the camera feed display"""
-        if self._camera_running:
-            ret, frame = self.cap.read()
-            if ret:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                img = Image.fromarray(frame)
-                img = img.resize((self.CAMERA_WIDTH, self.CAMERA_HEIGHT))
-                imgtk = ImageTk.PhotoImage(image=img)
-                
-                self.camera_label.imgtk = imgtk
-                self.camera_label.config(image=imgtk)
+        if self._camera_running and self.root.winfo_exists():
+            try:
+                ret, frame = self.cap.read()
+                if ret:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(frame)
+                    
+                    label_width = self.camera_label.winfo_width()
+                    label_height = self.camera_label.winfo_height()
+                    
+                    if label_width > 1 and label_height > 1:
+                        img = img.resize((label_width, label_height), Image.LANCZOS)
+                        imgtk = ImageTk.PhotoImage(image=img)
+                        
+                        self.camera_label.imgtk = imgtk
+                        self.camera_label.config(image=imgtk)
             
-            self.root.after(30, self.update_camera_feed)
-
+                if self._camera_running and self.root.winfo_exists():
+                    self.root.after(30, self.update_camera_feed)
+            except Exception as e:
+                print(f"Camera update error: {e}")
     def display_current_view(self):
         """Display current reference image, GIF and instructions"""
         # Load static reference image
         img_path = self.image_list[self.current_image_index]
         img = Image.open(img_path)
-        img = img.resize((self.IMAGE_WIDTH, self.IMAGE_HEIGHT), Image.LANCZOS)
-        img_tk = ImageTk.PhotoImage(img)
         
-        self.ref_image_label.config(image=img_tk)
-        self.ref_image_label.image = img_tk
+        # Get reference frame dimensions
+        ref_width = self.ref_image_label.winfo_width() - 10
+        ref_height = self.ref_image_label.winfo_height() - 10
+        
+        # Only resize if we have valid dimensions
+        if ref_width > 1 and ref_height > 1:
+            img = img.resize((ref_width, ref_height), Image.LANCZOS)
+            img_tk = ImageTk.PhotoImage(img)
+            
+            self.ref_image_label.config(image=img_tk)
+            self.ref_image_label.image = img_tk
         
         # Load and animate GIF
         gif_path = self.gif_list[self.current_image_index]
-        self.animate_gif(gif_path)
+        
+        # Get GIF frame dimensions
+        gif_width = self.gif_label.winfo_width() - 10
+        gif_height = self.gif_label.winfo_height() - 10
+        
+        # Only animate if we have valid dimensions
+        if gif_width > 1 and gif_height > 1:
+            self.animate_gif(gif_path, gif_width, gif_height)
         
         # Update instructions
         instructions = self.instructions_list[self.current_image_index]
@@ -967,18 +817,18 @@ class ImageCaptureApp:
         # Update button states
         self.update_button_states()
 
-    def animate_gif(self, gif_path):
-        """Animate GIF demonstration"""
+    def animate_gif(self, gif_path, width, height):
+        """Animate GIF demonstration with specified dimensions"""
         try:
             gif = Image.open(gif_path)
             frames = []
             
             for frame in ImageSequence.Iterator(gif):
-                frame = frame.resize((self.IMAGE_WIDTH, self.IMAGE_HEIGHT), Image.LANCZOS)
+                frame = frame.resize((width, height), Image.LANCZOS)
                 frames.append(ImageTk.PhotoImage(frame))
             
             self.gif_frames = frames
-            self.current_frame = 0
+            self.current_frame = 1
             self.animate_next_frame()
         except Exception as e:
             print(f"Error loading GIF: {e}")
@@ -1035,7 +885,7 @@ class ImageCaptureApp:
         preview.title("Image Preview")
         preview.geometry("900x700")
         preview.resizable(False, False)
-        preview.configure(bg="#f0f2f5")
+        preview.configure(bg="#f5f5f5")
         
         # Main frame
         main_frame = ttk.Frame(preview)
@@ -1101,9 +951,18 @@ class ImageCaptureApp:
         ).pack(side=tk.LEFT, padx=10)
 
     def save_image(self):
-        """Save current captured image to database"""
+        """Save current captured image to database and local folder"""
         try:
-            # Convert image to bytes
+            # Generate unique filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            img_num = self.current_image_index + 1
+            filename = f"patient_{self.patient_id}_img_{img_num}_{timestamp}.jpg"
+            filepath = os.path.join(self.captured_images_dir, filename)
+            
+            # Save image to file
+            self.captured_image.save(filepath, "JPEG")
+            
+            # Convert image to bytes for database
             img_bytes = io.BytesIO()
             self.captured_image.save(img_bytes, format="JPEG")
             img_data = img_bytes.getvalue()
@@ -1118,18 +977,19 @@ class ImageCaptureApp:
             # Save to database
             query = """
             INSERT INTO patient_images 
-            (patient_id, image_number, image_data, image_identifier, created_at)
-            VALUES (%s, %s, %s, %s, NOW())
+            (patient_id, image_number, image_data, image_identifier, created_at, file_path)
+            VALUES (%s, %s, %s, %s, NOW(), %s)
             """
             cursor.execute(query, (
                 self.patient_id,
-                self.current_image_index + 1,  # 1-based index
+                img_num,  # 1-based index
                 img_data,
-                img_id
+                img_id,
+                filepath
             ))
             self.connection.commit()
             
-            messagebox.showinfo("Success", "Image saved successfully")
+            messagebox.showinfo("Success", f"Image saved successfully to:\n{filepath}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save image: {str(e)}")
         finally:
@@ -1137,23 +997,34 @@ class ImageCaptureApp:
                 cursor.close()
 
     def generate_image_id(self, phone, datetime_str):
-        """Generate unique image identifier"""
+        #"""Generate unique image identifier"""
         date_part = datetime_str[:8]  # YYYYMMDD
         cursor = self.connection.cursor()
         
-        query = """
-        SELECT MAX(image_identifier) FROM patient_images 
-        WHERE patient_id = %s AND DATE(created_at) = %s
-        """
-        cursor.execute(query, (self.patient_id, f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"))
-        result = cursor.fetchone()[0]
-        
-        if result:
-            base_id, last_char = result.rsplit('_', 1)
-            next_char = chr(ord(last_char) + 1) if last_char != 'Z' else 'A'
-            return f"{base_id}_{next_char}"
-        else:
-            return f"{phone}_{date_part}A"
+        try:
+            query = """
+            SELECT MAX(image_identifier) FROM patient_images 
+            WHERE patient_id = %s AND DATE(created_at) = %s
+            """
+            cursor.execute(query, (self.patient_id, f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"))
+            result = cursor.fetchone()[0]
+            
+            if result:
+                # Split into base and suffix
+                parts = result.rsplit('_', 1)
+                if len(parts) == 2:
+                    base_id, last_char = parts
+                    if last_char and len(last_char) == 1:  # Ensure it's a single character
+                        next_char = chr(ord(last_char) + 1) if last_char != 'Z' else 'A'
+                        return f"{base_id}_{next_char}"
+                
+                # Fallback if format doesn't match
+                return f"{phone}_{date_part}A"
+            else:
+                return f"{phone}_{date_part}A"
+        finally:
+            if cursor:
+                cursor.close()
 
     def finish_capture(self):
         """Finish image capture and generate report"""
@@ -1350,7 +1221,6 @@ Your Dental Clinic"""
         """Clean up resources and exit"""
         self.cleanup()
         self.root.destroy()
-
     def cleanup(self):
         """Clean up all resources"""
         self._camera_running = False
@@ -1361,20 +1231,22 @@ Your Dental Clinic"""
         
         # Clean up servos and motors
         cleanup_servos()
-        MotorX.cleanup()
-        MotorY.cleanup()
+        if 'MotorX' in globals():
+            MotorX.cleanup()
+        if 'MotorY' in globals():
+            MotorY.cleanup()
         
         # Close database connection
         if hasattr(self, 'connection') and self.connection:
             self.connection.close()
-
 if __name__ == "__main__":
     root = tk.Tk()
     app = ImageCaptureApp(root, "example@example.com")  # Replace with actual email
     
     def on_closing():
-        app.cleanup()
-        root.destroy()
+        if messagebox.askokcancel("Quit", "Do you want to quit?"):
+            app.cleanup()
+            root.destroy()
     
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
