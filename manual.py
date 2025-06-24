@@ -931,7 +931,7 @@ class ImageCaptureApp:
             btn_frame,
             text="Retake",
             command=lambda: [preview.destroy(), self.capture_image()],
-            width=12
+            width=20
         ).pack(side=tk.LEFT, padx=10)
         
         ttk.Button(
@@ -939,7 +939,7 @@ class ImageCaptureApp:
             text="Save",
             command=lambda: [self.save_image(), preview.destroy()],
             style='Accent.TButton',
-            width=12
+            width=20
         ).pack(side=tk.LEFT, padx=10)
         
         ttk.Button(
@@ -947,7 +947,7 @@ class ImageCaptureApp:
             text="Save & Next",
             command=lambda: [self.save_image(), preview.destroy(), self.next_image()],
             style='Accent.TButton',
-            width=12
+            width=20
         ).pack(side=tk.LEFT, padx=10)
 
     def save_image(self):
@@ -989,7 +989,7 @@ class ImageCaptureApp:
             ))
             self.connection.commit()
             
-            messagebox.showinfo("Success", f"Image saved successfully to:\n{filepath}")
+            #messagebox.showinfo("Success", f"Image saved successfully to:\n{filepath}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save image: {str(e)}")
         finally:
