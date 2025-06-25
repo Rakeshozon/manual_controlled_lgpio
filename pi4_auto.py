@@ -102,23 +102,27 @@ try:
 except Exception as e:
     print(f"Motor initialization error: {e}")
     raise
-
 def stepper_move_x(steps):
-    """Move X stepper motor by specified steps"""
+    """Move X stepper motor to absolute position"""
     try:
-        direction = 'forward' if steps > 0 else 'backward'
-        MotorX.TurnStep(Dir=direction, steps=abs(steps), stepdelay=0.005)
+        current_pos = MotorX.get_current_position()  # You'll need to implement this
+        delta = steps - current_pos
+        if delta != 0:
+            direction = 'forward' if delta > 0 else 'backward'
+            MotorX.TurnStep(Dir=direction, steps=abs(delta), stepdelay=0.005)
     except Exception as e:
         print(f"Error moving X stepper: {e}")
 
 def stepper_move_y(steps):
-    """Move Y stepper motor by specified steps"""
+    """Move Y stepper motor to absolute position"""
     try:
-        direction = 'forward' if steps > 0 else 'backward'
-        MotorY.TurnStep(Dir=direction, steps=abs(steps), stepdelay=0.005)
+        current_pos = MotorY.get_current_position()  # You'll need to implement this
+        delta = steps - current_pos
+        if delta != 0:
+            direction = 'forward' if delta > 0 else 'backward'
+            MotorY.TurnStep(Dir=direction, steps=abs(delta), stepdelay=0.005)
     except Exception as e:
         print(f"Error moving Y stepper: {e}")
-
 # Load Haar cascades for face and mouth detection
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 mouth_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_smile.xml')
@@ -129,21 +133,37 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fronta
 mouth_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_smile.xml')
 
 # Predefined servo positions for each instruction
-SERVO_POSITIONS = [
-    {'x': 90, 'y': 90},     # Position 1 - Bottom of tongue
-    {'x': 115, 'y': 100}, 
-    {'x': 115, 'y': 80},   # Position 2 - Bottom teeth view
-    {'x': 110, 'y': 105},   # Position 3 - Bottom teeth with lower lip pulled down
-    {'x': 115, 'y': 85},    # Position 4 - Cheek side of bottom teeth 2
-    {'x': 65, 'y': 85},   # Position 5 - Cheek side of bottom teeth
-    {'x': 120, 'y': 100},    # Position 6 - Cheek side of top teeth
-    {'x': -30, 'y': 10},   # Position 7 - Cheek side of top teeth 2
-    {'x': 0, 'y': 15},     # Position 8 - Front of tongue
-    {'x': -20, 'y': 5},    # Position 9 - Left side of tongue
-    {'x': 20, 'y': 5},     # Position 10 - Right side of tongue
-    {'x': 0, 'y': 0},      # Position 11 - Smile showing front teeth
-    {'x': 10, 'y': -75},   # Position 12 - Top teeth view
-    {'x': -10, 'y': -75}   # Position 13 - Top teeth with upper lip pulled up
+SERVO_POSITIONS = [ 
+    {'x': 90, 'y': 90},   # Position 2 - Bottom teeth view
+    {'x': 90, 'y': 100},   # Position 3 - Bottom teeth with lower lip pulled down
+    {'x': 95, 'y': 90},    # Position 4 - Cheek side of bottom teeth 2
+    {'x': 95, 'y': 95},   # Position 5 - Cheek side of bottom teeth
+    {'x': 70, 'y': 80},    # Position 6 - Cheek side of top teeth
+    {'x': 70, 'y': 90},   # Position 7 - Cheek side of top teeth 2
+    {'x': 90, 'y': 90},     # Position 8 - Front of tongue
+    {'x': 70, 'y': 90},    # Position 9 - Left side of tongue
+    {'x': 100, 'y': 90},     # Position 10 - Right side of tongue
+    {'x': 90, 'y': 90},      # Position 11 - Smile showing front teeth
+    {'x': 90, 'y': 70},   # Position 12 - Top teeth view
+    {'x': 90, 'y': 70},  # Position 13 - Top teeth with upper lip pulled up
+    {'x': 90, 'y': 90}
+]
+
+STEPPER_POSITIONS = [
+    {'x': 0, 'y': 0},       # Position 1 - Bottom of tongue
+    {'x': 500, 'y': 200},   # Position 2 - Bottom teeth view
+    {'x': 500, 'y': -200},  # Position 3 - Bottom teeth with lower lip pulled down
+    {'x': 400, 'y': -200},
+    {'x': 300, 'y': -200},
+     {'x': 300, 'y': 100},
+     {'x': 500, 'y': 200},  # Position 3 - Bottom teeth with lower lip pulled down
+    {'x': 400, 'y': -200},
+    {'x': 300, 'y': 600},
+     {'x': 600, 'y': -200},
+     {'x': 500, 'y': 400},  # Position 3 - Bottom teeth with lower lip pulled down
+    {'x': 400, 'y': 500},
+    {'x': 200, 'y': 200},
+
 ]
 class ReportGenerator:
     def __init__(self, patient_id, connection):
@@ -716,8 +736,8 @@ class ImageCaptureApp:
         ttk.Button(btn_frame, text="▼ Down", 
                   command=lambda: move_servo_y(10), 
                   width=8).pack(side=tk.LEFT, padx=2)
-        
-        # Auto-capture toggle button
+            # Create grid for position buttons (4 columns)
+               # Auto-capture toggle button
         self.auto_capture_btn = ttk.Button(
             servo_frame, 
             text="Auto Capture OFF", 
@@ -937,111 +957,194 @@ class ImageCaptureApp:
                     stepdelay=0.001 if fine_tune else 0.002
                 )
                 MotorY.Stop()
-
     def toggle_auto_capture(self):
-        """Toggle auto-capture mode"""
-        self.auto_capture_active = not self.auto_capture_active
-
-        if self.auto_capture_active:
-            self.last_capture_time = time.time()
-            self.next_capture_time = self.last_capture_time + self.auto_capture_interval
+        """Start/stop auto-capture with perfect 12-second intervals"""
+        if not self.auto_capture_active:
+            # STARTING AUTO-CAPTURE
+            self.auto_capture_active = True
             self.tracking_active = False
-            self.tracking_status.config(text="Tracking: INACTIVE", foreground='red')
             self.auto_capture_btn.config(text="Auto Capture ON")
-            messagebox.showinfo("Auto Capture", f"Auto capture enabled - will capture every {self.auto_capture_interval} seconds")
-        else:
-            self.tracking_active = True
-            self.tracking_status.config(text="Tracking: ACTIVE", foreground='green')
-            self.auto_capture_btn.config(text="Auto Capture OFF")
-
-        self.update_timer_display()
-
-    def update_timer_display(self):
-        """Update the auto-capture timer display"""
-        if self.auto_capture_active:
-            remaining = max(0, self.next_capture_time - time.time())
-            self.timer_label.config(text=f"Next auto capture in: {int(remaining)}s")
+            self.tracking_status.config(text="Tracking: INACTIVE", foreground='red')
             
-            # Check if it's time to capture
-            if time.time() >= self.next_capture_time:
-                self.auto_capture_image()
+            # Initialize sequence
+            self.current_image_index = 0
+            self.display_current_view()
+            
+            # Schedule first capture in 12 seconds
+            self.next_capture_time = time.time() + 12
+            self.update_timer_display()
+            
+            messagebox.showinfo("Auto Capture", "Auto capture started with 12-second intervals")
         else:
+            # STOPPING AUTO-CAPTURE
+            self.auto_capture_active = False
+            self.tracking_active = True
+            self.auto_capture_btn.config(text="Auto Capture OFF")
+            self.tracking_status.config(text="Tracking: ACTIVE", foreground='green')
             self.timer_label.config(text="Auto Capture: OFF")
 
-        # Schedule next update
-        if self._camera_running:
+    def update_timer_display(self):
+        """Handle the countdown and triggering captures"""
+        if not self.auto_capture_active or not self._camera_running:
+            return
+        
+        current_time = time.time()
+        remaining = max(0, self.next_capture_time - current_time)
+        
+        # Update display
+        self.timer_label.config(text=f"Next capture in: {int(remaining)}s")
+        
+        if current_time >= self.next_capture_time:
+            # TIME TO CAPTURE
+            self.perform_capture_sequence()
+        else:
+            # Continue countdown
             self.root.after(1000, self.update_timer_display)
 
-    def auto_capture_image(self):
-        """Automatically capture image at predefined position with enhanced reliability"""
+    def perform_capture_sequence(self):
+        """Handle the entire capture process with guaranteed timing"""
         try:
-            if not self._camera_running or not self.cap.isOpened():
-                messagebox.showerror("Error", "Camera is not available for capture")
-                self.auto_capture_active = False
-                self.update_ui_auto_capture_status()
-                return
-
-            # Move to predefined position for current view
+            # 1. Move to position
+            self.timer_label.config(text="Moving to position...", foreground='orange')
+            self.root.update()
             if not self.move_to_position():
-                messagebox.showerror("Error", f"Failed to move to position for image {self.current_image_index + 1}")
-                return
-
-            # Allow time to settle with progress feedback
-            self.timer_label.config(text="Positioning...", foreground='orange')
-            for i in range(3, 0, -1):
-                self.timer_label.config(text=f"Capturing in {i}...")
-                self.root.update()
-                time.sleep(1)
-
-            # Capture image
+                raise Exception("Failed to move to position")
+            
+            # 2. Small stabilization delay
+            time.sleep(1)
+            
+            # 3. Capture image
+            self.timer_label.config(text="Capturing...", foreground='orange')
+            self.root.update()
             ret, frame = self.cap.read()
             if not ret:
-                messagebox.showerror("Error", "Failed to capture image from USB camera.")
-                return
-
-            # Convert and store image
+                raise Exception("Failed to capture image")
+            
+            # 4. Save image
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             self.captured_image = Image.fromarray(frame_rgb)
-            
-            # Visual feedback
-            self.flash_screen()
-            self.timer_label.config(text="Processing image...", foreground='blue')
-            self.root.update()
-            
-            # Save the image
             self.save_image(auto_save=True)
+            self.flash_screen()
             
-            # Update capture timing
-            current_time = time.time()
-            self.last_capture_time = current_time
-            self.next_capture_time = current_time + self.auto_capture_interval
-            
-            # Move to next position or finish
+            # 5. Prepare for next capture
             if self.current_image_index < len(self.image_list) - 1:
                 self.current_image_index += 1
                 self.display_current_view()
                 
-                # Brief pause before next capture
-                self.timer_label.config(text="Preparing next view...")
+                # Set next capture exactly 12 seconds from NOW
+                self.next_capture_time = time.time() + 12
+                self.timer_label.config(text=f"Next capture in: 12s", foreground='green')
                 self.root.update()
-                time.sleep(1)
+                
+                # Restart countdown
+                self.root.after(1000, self.update_timer_display)
             else:
-                # All images captured
+                # All done
                 self.auto_capture_active = False
                 self.tracking_active = True
-                self.update_ui_auto_capture_status()
-                messagebox.showinfo("Complete", "All images have been captured automatically!")
+                #self.update_ui_auto_capture_status()
+                messagebox.showinfo("Complete", "All images captured successfully!")
                 self.finish_capture()
                 
         except Exception as e:
-            error_msg = f"Auto-capture failed: {str(e)}"
-            print(error_msg)
-            messagebox.showerror("Error", error_msg)
             self.auto_capture_active = False
-            self.update_ui_auto_capture_status()
+            self.tracking_active = True
+            #self.update_ui_auto_capture_status()
+            messagebox.showerror("Error", f"Capture failed: {str(e)}")
+
+    def auto_capture_image(self):
+        """Auto-capture with perfect 12-second intervals and stepper/servo coordination"""
+        try:
+            if not self._camera_running:
+                raise Exception("Camera not available")
+            
+            # 1. Position Movement
+            self.timer_label.config(text="Moving to position...", foreground='orange')
+            self.root.update()
+            
+            if not self.move_to_position():
+                raise Exception("Failed to move to position")
+            
+            # 2. Stabilization Delay
+            for i in range(3, 0, -1):
+                self.timer_label.config(text=f"Stabilizing... {i}")
+                self.root.update()
+                time.sleep(1)
+            
+            # 3. Image Capture
+            self.timer_label.config(text="Capturing...", foreground='orange')
+            self.root.update()
+            ret, frame = self.cap.read()
+            if not ret:
+                raise Exception("Capture failed")
+            
+            # 4. Save Image
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            self.captured_image = Image.fromarray(frame_rgb)
+            self.save_image(auto_save=True)
+            self.flash_screen()
+            
+            # 5. Schedule Next Capture
+            if self.current_image_index < len(self.image_list) - 1:
+                self.current_image_index += 1
+                self.display_current_view()
+                
+                # Set next capture exactly 12 seconds from now
+                self.next_capture_time = time.time() + 12
+                self.timer_label.config(text=f"Next capture in: 12s", foreground='green')
+                self.root.update()
+                
+                # Update position display
+                self.update_position_display()
+                
+                # Continue sequence
+                self.root.after(1000, self.update_timer_display)
+            else:
+                # All captures complete
+                self.auto_capture_active = False
+                self.tracking_active = True
+                #self.update_ui_auto_capture_status()
+                messagebox.showinfo("Complete", "All images captured successfully!")
+                self.finish_capture()
+
+        except Exception as e:
+            self.auto_capture_active = False
+            self.tracking_active = True
+            #self.update_ui_auto_capture_status()
+            messagebox.showerror("Error", f"Auto-capture failed: {str(e)}")
+
+    def move_to_preset_position(self, index):
+        """Move to specific preset position (manual control)"""
+        if 0 <= index < len(SERVO_POSITIONS):
+            self.current_image_index = index
+            self.display_current_view()
+            self.move_to_position(index)
+            self.update_position_display()
+
+    def calibrate_steppers(self):
+        """Calibrate stepper motors to home position"""
+        MotorX.current_position = 0
+        MotorY.current_position = 0
+        self.position_label.config(text="X: 0 | Y: 0")
+        messagebox.showinfo("Calibrated", "Steppers reset to home position")
+
+    def update_position_display(self):
+        """Update the position display label"""
+        x_pos = MotorX.get_current_position()
+        y_pos = MotorY.get_current_position()
+        self.position_label.config(text=f"X: {x_pos} | Y: {y_pos}")
+        def move_stepper_to_position(index):
+            """Move both steppers to preset position"""
+            if 0 <= index < len(STEPPER_POSITIONS):
+                target = STEPPER_POSITIONS[index]
+                stepper_move_x(target['x'])
+                stepper_move_y(target['y'])
+                return True
+            return False
 
     def move_to_position(self, index=None):
         """Move servos to predefined position for current or specified index using StableServo"""
+        time.sleep(1)
         if index is None:
             index = self.current_image_index
         
@@ -1050,9 +1153,12 @@ class ImageCaptureApp:
             servo_x.move_to_angle(target_pos['x'])
             servo_y.move_to_angle(target_pos['y'])
             self.current_servo_positions = target_pos.copy()
+            stepper_target = STEPPER_POSITIONS[index]
+            stepper_move_x(stepper_target['x'])
+            stepper_move_y(stepper_target['y'])
             return True
         return False
-
+    
     def flash_screen(self):
         """Briefly flash the camera display to indicate capture"""
         original_bg = self.camera_label.cget('background')
@@ -1460,8 +1566,8 @@ class ImageCaptureApp:
             # Email configuration (replace with your SMTP details)
             smtp_server = "smtp.gmail.com"
             smtp_port = 587
-            sender_email = "your_email@gmail.com"
-            sender_password = "your_app_password"  # Use app-specific password
+            sender_email = "rakeshozon46@gmail.com"
+            sender_password = "urhhdkyxlhunsbdo"  # Use app-specific password
             
             # Create message
             msg = MIMEMultipart()
