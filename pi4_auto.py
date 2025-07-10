@@ -91,38 +91,53 @@ try:
     MotorX = HR8825(
         dir_pin=24,    # BCM 19 (Physical pin 24)
         step_pin=18,   # BCM 24 (Physical pin 18)
-        enable_pin=4,  # BCM 23 (Physical pin 16)
+        enable_pin=25,  # BCM 23 (Physical pin 16)
         mode_pins=(21, 22, 5)  # M0, M1, M2 (BCM 21,22,27)
     )
     
-    # Set microstepping modes
-    MotorX.SetMicroStep('softward', 'fullstep')
-    MotorY.SetMicroStep('hardward', 'halfstep')
+    # Set microstepping modes - use 'softward' consistently
+    MotorX.SetMicroStep('softward', '1/8step')
+    MotorY.SetMicroStep('softward', '1/8step')
     
 except Exception as e:
     print(f"Motor initialization error: {e}")
     raise
 def stepper_move_x(steps):
-    """Move X stepper motor to absolute position"""
+    """Move X stepper motor by relative steps"""
     try:
-        current_pos = MotorX.get_current_position()  # You'll need to implement this
-        delta = steps - current_pos
-        if delta != 0:
-            direction = 'forward' if delta > 0 else 'backward'
-            MotorX.TurnStep(Dir=direction, steps=abs(delta), stepdelay=0.005)
+        if steps > 0:
+            MotorX.TurnStep(direction='forward', steps=abs(steps), stepdelay=0.002)
+        elif steps < 0:
+            MotorX.TurnStep(direction='backward', steps=abs(steps), stepdelay=0.002)
     except Exception as e:
         print(f"Error moving X stepper: {e}")
 
 def stepper_move_y(steps):
-    """Move Y stepper motor to absolute position"""
+    """Move Y stepper motor by relative steps"""
     try:
-        current_pos = MotorY.get_current_position()  # You'll need to implement this
-        delta = steps - current_pos
-        if delta != 0:
-            direction = 'forward' if delta > 0 else 'backward'
-            MotorY.TurnStep(Dir=direction, steps=abs(delta), stepdelay=0.005)
+        if steps > 0:
+            MotorY.TurnStep(direction='forward', steps=abs(steps), stepdelay=0.002)
+        elif steps < 0:
+            MotorY.TurnStep(direction='backward', steps=abs(steps), stepdelay=0.002)
     except Exception as e:
         print(f"Error moving Y stepper: {e}")
+
+def move_to_preset_position(index):
+    """Move to specific preset position"""
+    if 0 <= index < len(STEPPER_POSITIONS):
+        target = STEPPER_POSITIONS[index]
+        MotorX.move_to_position(target['x'])
+        MotorY.move_to_position(target['y'])
+        return True
+    return False
+def move_to_preset_position(index):
+    """Move to specific preset position"""
+    if 0 <= index < len(STEPPER_POSITIONS):
+        target = STEPPER_POSITIONS[index]
+        MotorX.move_to_position(target['x'])
+        MotorY.move_to_position(target['y'])
+        return True
+    return False
 # Load Haar cascades for face and mouth detection
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 mouth_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_smile.xml')
@@ -134,36 +149,36 @@ mouth_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_smile
 
 # Predefined servo positions for each instruction
 SERVO_POSITIONS = [ 
-    {'x': 90, 'y': 90},   # Position 2 - Bottom teeth view
-    {'x': 90, 'y': 100},   # Position 3 - Bottom teeth with lower lip pulled down
-    {'x': 95, 'y': 90},    # Position 4 - Cheek side of bottom teeth 2
-    {'x': 95, 'y': 95},   # Position 5 - Cheek side of bottom teeth
-    {'x': 70, 'y': 80},    # Position 6 - Cheek side of top teeth
-    {'x': 70, 'y': 90},   # Position 7 - Cheek side of top teeth 2
-    {'x': 90, 'y': 90},     # Position 8 - Front of tongue
-    {'x': 70, 'y': 90},    # Position 9 - Left side of tongue
-    {'x': 100, 'y': 90},     # Position 10 - Right side of tongue
+                             # Position 2 - Bottom teeth view
+    {'x': 90, 'y': 110},   # Position 3 - Bottom teeth with lower lip pulled down
+    {'x': 90, 'y': 110},    # Position 4 - Cheek side of bottom teeth 2
+    {'x': 80, 'y': 110},   # Position 5 - Cheek side of bottom teeth
+    {'x': 100, 'y': 110},    # Position 6 - Cheek side of top teeth
+    {'x': 80, 'y': 70},   # Position 7 - Cheek side of top teeth 2
+    {'x': 100, 'y': 70},     # Position 8 - Front of tongue
+    {'x': 90, 'y': 90},    # Position 9 - Left side of tongue
+    {'x': 90, 'y': 90},     # Position 10 - Right side of tongue
     {'x': 90, 'y': 90},      # Position 11 - Smile showing front teeth
-    {'x': 90, 'y': 70},   # Position 12 - Top teeth view
-    {'x': 90, 'y': 70},  # Position 13 - Top teeth with upper lip pulled up
+    {'x': 90, 'y': 90},   # Position 12 - Top teeth view
+    {'x': 90, 'y': 60},  # Position 13 - Top teeth with upper lip pulled up
+    {'x': 90, 'y': 80},
     {'x': 90, 'y': 90}
+  
 ]
-
 STEPPER_POSITIONS = [
-    {'x': 0, 'y': 0},       # Position 1 - Bottom of tongue
-    {'x': 500, 'y': 200},   # Position 2 - Bottom teeth view
-    {'x': 500, 'y': -200},  # Position 3 - Bottom teeth with lower lip pulled down
-    {'x': 400, 'y': -200},
-    {'x': 300, 'y': -200},
-     {'x': 300, 'y': 100},
-     {'x': 500, 'y': 200},  # Position 3 - Bottom teeth with lower lip pulled down
-    {'x': 400, 'y': -200},
-    {'x': 300, 'y': 600},
-     {'x': 600, 'y': -200},
-     {'x': 500, 'y': 400},  # Position 3 - Bottom teeth with lower lip pulled down
-    {'x': 400, 'y': 500},
-    {'x': 200, 'y': 200},
-
+    {'x': 0, 'y': 0},       # Home position
+    {'x': 500, 'y': 200},   # Position 1
+    {'x': 500, 'y': -200},  # Position 2
+    {'x': 400, 'y': -200},  # Position 3
+    {'x': 300, 'y': -200},  # Position 4
+    {'x': 300, 'y': 100},   # Position 5
+    {'x': 500, 'y': 200},   # Position 6
+    {'x': 400, 'y': -200},  # Position 7
+    {'x': 300, 'y': 600},   # Position 8
+    {'x': 600, 'y': -200},  # Position 9
+    {'x': 500, 'y': 400},   # Position 10
+    {'x': 400, 'y': 500},   # Position 11
+    {'x': 200, 'y': 200}    # Position 12
 ]
 class ReportGenerator:
     def __init__(self, patient_id, connection):
@@ -592,7 +607,20 @@ class ImageCaptureApp:
         if hasattr(self, 'cap') and self.cap.isOpened():
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_height)
-
+    def calibrate_steppers():
+        """Calibrate steppers by moving to home position"""
+        try:
+            # Move to home (0,0)
+            MotorX.move_to_position(0)
+            MotorY.move_to_position(0)
+            
+            # Reset position counters
+            MotorX.current_position = 0
+            MotorY.current_position = 0
+            
+            messagebox.showinfo("Calibration", "Steppers calibrated to home position")
+        except Exception as e:
+            messagebox.showerror("Calibration Error", f"Failed to calibrate: {str(e)}")
     def setup_ui(self):
         """Set up all UI components with responsive layout"""
         # Main container using grid for responsive layout
@@ -916,7 +944,6 @@ class ImageCaptureApp:
         cv2.line(frame, (center_x, 0), (center_x, frame_height), (0, 255, 255), 1)
         
         return frame
-
     def adjust_motors(self, offset_x, offset_y, fine_tune=False):
         """Adjust both servos and steppers based on offset using StableServo"""
         # Servo adjustments (0-180 range)
@@ -931,9 +958,9 @@ class ImageCaptureApp:
             # Stepper motor adjustment for X axis
             steps = int(abs(offset_x)/5)
             if steps > 0:
-                MotorX.SetMicroStep('software', '1/8step')
+                MotorX.SetMicroStep('softward', '1/8step')
                 MotorX.TurnStep(
-                    Dir='forward' if offset_x < 0 else 'backward',
+                    direction='forward' if offset_x < 0 else 'backward',
                     steps=steps,
                     stepdelay=0.001 if fine_tune else 0.002
                 )
@@ -950,9 +977,9 @@ class ImageCaptureApp:
             # Stepper motor adjustment for Y axis
             steps = int(abs(offset_y)/5)
             if steps > 0:
-                MotorY.SetMicroStep('software', '1/8step')
+                MotorY.SetMicroStep('softward', '1/8step')
                 MotorY.TurnStep(
-                    Dir='forward' if offset_y < 0 else 'backward',
+                    direction='forward' if offset_y < 0 else 'backward',
                     steps=steps,
                     stepdelay=0.001 if fine_tune else 0.002
                 )
